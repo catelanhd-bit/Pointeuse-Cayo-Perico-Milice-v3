@@ -1,1 +1,22 @@
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #0f1d16;
+    color: white;
+}
 
+#app {
+    max-width: 900px;
+    margin: 80px auto;
+    text-align: center;
+}
+
+h1 {
+    color: #d4af37;
+    font-size: 48px;
+}
+
+p {
+    font-size: 20px;
+    color: #d0d0d0;
+}
