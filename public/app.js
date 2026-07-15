@@ -1,20 +1,17 @@
-console.log("Pointeuse Cayo Perico chargée.");
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-document.addEventListener("DOMContentLoaded", async () => {
-    try {
-        const res = await fetch("/health");
-        const data = await res.json();
+  <title>Pointeuse Cayo Perico</title>
 
-        document.querySelector("#app").innerHTML = `
-            <h1>🌴 Pointeuse Cayo Perico</h1>
-            <p>Le serveur fonctionne correctement.</p>
-            <p><strong>Health :</strong> ${JSON.stringify(data)}</p>
-        `;
-    } catch (e) {
-        document.querySelector("#app").innerHTML = `
-            <h1>❌ Erreur</h1>
-            <p>Impossible de contacter le serveur.</p>
-        `;
-        console.error(e);
-    }
-});
+  <link rel="stylesheet" href="/style.css?v=6">
+</head>
+
+<body>
+  <main id="app"></main>
+
+  <script src="/app.js?v=6"></script>
+</body>
+</html>
