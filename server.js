@@ -13,15 +13,15 @@ const ADMIN_PASSWORD =
   process.env.ADMIN_PASSWORD || "CayoAdmin2026!";
 
 const SESSION_SECRET =
-  process.env.SESSION_SECRET || "change-this-secret-cayo";
+  process.env.SESSION_SECRET || "change-this-cayo-secret";
 
-const DATABASE_PATH = path.join(__dirname, "db.json");
+const DB_FILE = path.join(__dirname, "db.json");
 
 /* =========================================================
    BASE DE DONNÉES
 ========================================================= */
 
-function createDefaultDatabase() {
+function defaultDatabase() {
   return {
     requests: [],
     members: [],
@@ -31,25 +31,28 @@ function createDefaultDatabase() {
 }
 
 function loadDatabase() {
-  if (!fs.existsSync(DATABASE_PATH)) {
+  if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(
-      DATABASE_PATH,
-      JSON.stringify(createDefaultDatabase(), null, 2),
+      DB_FILE,
+      JSON.stringify(defaultDatabase(), null, 2),
       "utf8"
     );
   }
 
   try {
     return JSON.parse(
-      fs.readFileSync(DATABASE_PATH, "utf8")
+      fs.readFileSync(DB_FILE, "utf8")
     );
   } catch (error) {
-    console.error("Erreur de lecture de la base :", error);
+    console.error(
+      "Erreur de lecture de la base de données :",
+      error
+    );
 
-    const database = createDefaultDatabase();
+    const database = defaultDatabase();
 
     fs.writeFileSync(
-      DATABASE_PATH,
+      DB_FILE,
       JSON.stringify(database, null, 2),
       "utf8"
     );
@@ -60,7 +63,7 @@ function loadDatabase() {
 
 function saveDatabase(database) {
   fs.writeFileSync(
-    DATABASE_PATH,
+    DB_FILE,
     JSON.stringify(database, null, 2),
     "utf8"
   );
@@ -70,12 +73,6 @@ function saveDatabase(database) {
    OUTILS
 ========================================================= */
 
-function createDeviceToken() {
-  return crypto
-    .randomBytes(32)
-    .toString("hex");
-}
-
 function normalizeName(value) {
   return String(value || "")
     .trim()
@@ -83,23 +80,68 @@ function normalizeName(value) {
     .toLowerCase();
 }
 
+function createDeviceToken() {
+  return crypto
+    .randomBytes(32)
+    .toString("hex");
+}
+
 function getEntryDuration(entry) {
-  const start = new Date(entry.start).getTime();
+  const start =
+    new Date(entry.start).getTime();
 
   const end = entry.end
     ? new Date(entry.end).getTime()
     : Date.now();
 
-  return Math.max(0, end - start);
+  return Math.max(
+    0,
+    end - start
+  );
 }
 
 function calculateBonus(durationMs) {
   return Math.round(
-    (durationMs / 3600000) * RATE
+    (durationMs / 3600000) *
+    RATE
   );
 }
 
-function findMemberByToken(database, token) {
+function getStartOfCurrentWeek() {
+  const now = new Date();
+
+  const start = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  const day = start.getDay();
+
+  const daysSinceMonday =
+    day === 0
+      ? 6
+      : day - 1;
+
+  start.setDate(
+    start.getDate() -
+    daysSinceMonday
+  );
+
+  start.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  return start;
+}
+
+function findMemberByToken(
+  database,
+  token
+) {
   return database.members.find(
     (member) =>
       member.active &&
@@ -108,232 +150,234 @@ function findMemberByToken(database, token) {
   );
 }
 
-function requireAdmin(request, response, next) {
+function requireAdmin(
+  request,
+  response,
+  next
+) {
   if (!request.session.admin) {
-    return response.status(403).json({
-      error: "Accès administrateur requis."
-    });
+    return response
+      .status(403)
+      .json({
+        error:
+          "Accès administrateur requis."
+      });
   }
 
   next();
 }
 
 /* =========================================================
-   CONFIGURATION EXPRESS
+   CONFIGURATION
 ========================================================= */
 
-app.use(express.json());
+app.use(
+  express.json()
+);
 
 app.use(
   session({
     secret: SESSION_SECRET,
+
     resave: false,
+
     saveUninitialized: false,
+
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 1000 * 60 * 60 * 12
+      maxAge:
+        1000 *
+        60 *
+        60 *
+        12
     }
   })
 );
 
 /* =========================================================
-   ROUTES PUBLIQUES
+   TEST SERVEUR
 ========================================================= */
 
-app.get("/health", (request, response) => {
-  response.json({
-    ok: true,
-    version: "finale"
-  });
-});
-
-/* =========================================================
-   DEMANDE D’ACCÈS
-========================================================= */
-
-app.post("/api/request", (request, response) => {
-  const {
-    firstName,
-    lastName,
-    phone = "",
-    message = "",
-    deviceToken = ""
-  } = request.body || {};
-
-  if (!firstName || !lastName) {
-    return response.status(400).json({
-      error: "Le prénom et le nom RP sont obligatoires."
-    });
-  }
-
-  const database = loadDatabase();
-
-  const fullName = `${firstName} ${lastName}`
-    .trim()
-    .replace(/\s+/g, " ");
-
-  const normalizedFullName =
-    normalizeName(fullName);
-
-  const pendingRequest =
-    database.requests.find(
-      (item) =>
-        item.status === "pending" &&
-        normalizeName(item.fullName) ===
-          normalizedFullName
-    );
-
-  if (pendingRequest) {
-    return response.status(400).json({
-      error:
-        "Une demande est déjà en attente pour ce nom."
-    });
-  }
-
-  const existingMember =
-    database.members.find(
-      (member) =>
-        member.active &&
-        normalizeName(member.fullName) ===
-          normalizedFullName
-    );
-
-  if (existingMember) {
-    return response.status(400).json({
-      error:
-        "Ce membre possède déjà un accès validé."
-    });
-  }
-
-  const requestItem = {
-    id: Date.now(),
-    fullName,
-    firstName: String(firstName).trim(),
-    lastName: String(lastName).trim(),
-    phone: String(phone).trim(),
-    message: String(message).trim(),
-    deviceToken: String(deviceToken).trim(),
-    status: "pending",
-    createdAt: new Date().toISOString()
-  };
-
-  database.requests.push(requestItem);
-
-  saveDatabase(database);
-
-  response.json({
-    ok: true,
-    message:
-      "Votre demande a été envoyée au Général."
-  });
-});
-
-/* =========================================================
-   CONNEXION AUTOMATIQUE PAR APPAREIL
-========================================================= */
-
-app.post(
-  "/api/member/automatic-connect",
+app.get(
+  "/health",
   (request, response) => {
-    const { deviceToken } =
-      request.body || {};
-
-    if (!deviceToken) {
-      return response.status(401).json({
-        error: "Aucun appareil reconnu."
-      });
-    }
-
-    const database = loadDatabase();
-
-    const member = findMemberByToken(
-      database,
-      deviceToken
-    );
-
-    if (!member) {
-      return response.status(401).json({
-        error:
-          "Cet appareil n'est pas encore autorisé."
-      });
-    }
-
     response.json({
-      member: {
-        id: member.id,
-        fullName: member.fullName,
-        grade: member.grade,
-        division: member.division
-      }
+      ok: true,
+      version:
+        "final-weekly-wallet"
     });
   }
 );
 
 /* =========================================================
-   CONNEXION MANUELLE PAR NOM
+   DEMANDE D’ACCÈS
 ========================================================= */
 
-app.post("/api/connect", (request, response) => {
-  const {
-    fullName,
-    deviceToken = ""
-  } = request.body || {};
+app.post(
+  "/api/request",
+  (request, response) => {
+    const {
+      firstName,
+      lastName,
+      phone = "",
+      message = "",
+      deviceToken = ""
+    } = request.body || {};
 
-  if (!fullName) {
-    return response.status(400).json({
-      error: "Indiquez votre nom RP complet."
+    if (
+      !firstName ||
+      !lastName ||
+      !deviceToken
+    ) {
+      return response
+        .status(400)
+        .json({
+          error:
+            "Le prénom, le nom RP et l’identifiant de l’appareil sont obligatoires."
+        });
+    }
+
+    const database =
+      loadDatabase();
+
+    const fullName =
+      `${firstName} ${lastName}`
+        .trim()
+        .replace(/\s+/g, " ");
+
+    const normalizedName =
+      normalizeName(fullName);
+
+    const existingRequest =
+      database.requests.find(
+        (item) =>
+          item.status ===
+            "pending" &&
+          (
+            normalizeName(
+              item.fullName
+            ) === normalizedName ||
+            item.deviceToken ===
+              deviceToken
+          )
+      );
+
+    if (existingRequest) {
+      return response
+        .status(400)
+        .json({
+          error:
+            "Une demande est déjà en attente."
+        });
+    }
+
+    const existingMember =
+      database.members.find(
+        (member) =>
+          member.active &&
+          (
+            normalizeName(
+              member.fullName
+            ) === normalizedName ||
+            (
+              Array.isArray(
+                member.tokens
+              ) &&
+              member.tokens.includes(
+                deviceToken
+              )
+            )
+          )
+      );
+
+    if (existingMember) {
+      return response
+        .status(400)
+        .json({
+          error:
+            "Cet accès est déjà validé."
+        });
+    }
+
+    database.requests.push({
+      id: Date.now(),
+
+      fullName,
+
+      firstName:
+        String(firstName).trim(),
+
+      lastName:
+        String(lastName).trim(),
+
+      phone:
+        String(phone).trim(),
+
+      message:
+        String(message).trim(),
+
+      deviceToken,
+
+      status: "pending",
+
+      createdAt:
+        new Date().toISOString()
+    });
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
     });
   }
+);
 
-  const database = loadDatabase();
+/* =========================================================
+   CONNEXION AUTOMATIQUE
+========================================================= */
 
-  const normalizedFullName =
-    normalizeName(fullName);
+app.post(
+  "/api/member/automatic-connect",
+  (request, response) => {
+    const {
+      deviceToken
+    } = request.body || {};
 
-  const member = database.members.find(
-    (item) =>
-      item.active &&
-      normalizeName(item.fullName) ===
-        normalizedFullName
-  );
+    const database =
+      loadDatabase();
 
-  if (!member) {
-    return response.status(404).json({
-      error:
-        "Aucun accès validé pour ce nom."
+    const member =
+      findMemberByToken(
+        database,
+        deviceToken
+      );
+
+    if (!member) {
+      return response
+        .status(401)
+        .json({
+          error:
+            "Cet appareil n’est pas autorisé."
+        });
+    }
+
+    response.json({
+      member: {
+        id: member.id,
+
+        fullName:
+          member.fullName,
+
+        grade:
+          member.grade,
+
+        division:
+          member.division
+      }
     });
   }
-
-  if (!Array.isArray(member.tokens)) {
-    member.tokens = [];
-  }
-
-  let finalToken = deviceToken;
-
-  if (
-    !finalToken ||
-    !member.tokens.includes(finalToken)
-  ) {
-    finalToken = createDeviceToken();
-    member.tokens.push(finalToken);
-  }
-
-  member.lastConnectionAt =
-    new Date().toISOString();
-
-  saveDatabase(database);
-
-  response.json({
-    member: {
-      id: member.id,
-      fullName: member.fullName,
-      grade: member.grade,
-      division: member.division
-    },
-    deviceToken: finalToken
-  });
-});
+);
 
 /* =========================================================
    TABLEAU DE BORD MILICIEN
@@ -342,167 +386,249 @@ app.post("/api/connect", (request, response) => {
 app.post(
   "/api/member/dashboard",
   (request, response) => {
-    const { deviceToken } =
-      request.body || {};
-
-    const database = loadDatabase();
-
-    const member = findMemberByToken(
-      database,
+    const {
       deviceToken
-    );
+    } = request.body || {};
+
+    const database =
+      loadDatabase();
+
+    const member =
+      findMemberByToken(
+        database,
+        deviceToken
+      );
 
     if (!member) {
-      return response.status(401).json({
-        error:
-          "Accès invalide ou désactivé."
-      });
+      return response
+        .status(401)
+        .json({
+          error:
+            "Accès invalide ou désactivé."
+        });
     }
 
-    const entries = database.entries
-      .filter(
+    const entries =
+      database.entries
+        .filter(
+          (entry) =>
+            entry.memberId ===
+            member.id
+        )
+        .sort(
+          (a, b) =>
+            new Date(b.start) -
+            new Date(a.start)
+        );
+
+    const completedEntries =
+      entries.filter(
         (entry) =>
-          entry.memberId === member.id
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.start) -
-          new Date(a.start)
+          entry.end
       );
 
     const activeEntry =
-      entries.find((entry) => !entry.end) ||
-      null;
-
-    const completedEntries =
-      entries.filter((entry) => entry.end);
+      entries.find(
+        (entry) =>
+          !entry.end
+      ) || null;
 
     const now = new Date();
 
-    const startOfToday = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate()
-    );
+    const startOfToday =
+      new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate()
+      );
 
     const startOfWeek =
-      new Date(startOfToday);
+      getStartOfCurrentWeek();
 
-    startOfWeek.setDate(
-      startOfToday.getDate() -
-        ((startOfToday.getDay() + 6) % 7)
-    );
-
-    const startOfMonth = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      1
-    );
+    const startOfMonth =
+      new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        1
+      );
 
     function sumSince(date) {
       return completedEntries
         .filter(
           (entry) =>
-            new Date(entry.start) >= date
+            new Date(
+              entry.start
+            ) >= date
         )
         .reduce(
           (total, entry) =>
             total +
-            getEntryDuration(entry),
+            getEntryDuration(
+              entry
+            ),
           0
         );
     }
 
-    response.json({
-      member: {
-        id: member.id,
-        fullName: member.fullName,
-        grade: member.grade,
-        division: member.division
-      },
+    const weeklyUnpaidEntries =
+      completedEntries.filter(
+        (entry) => {
+          const isThisWeek =
+            new Date(
+              entry.start
+            ) >= startOfWeek;
 
-      active: activeEntry,
-
-      rate: RATE,
-
-      stats: {
-        today: sumSince(startOfToday),
-        week: sumSince(startOfWeek),
-        month: sumSince(startOfMonth),
-
-        totalBonus:
-          completedEntries.reduce(
-            (total, entry) =>
-              total +
-              calculateBonus(
-                getEntryDuration(entry)
-              ),
-            0
-          )
-      },
-
-      entries: entries.map((entry) => {
-        const duration =
-          getEntryDuration(entry);
-
-        return {
-          ...entry,
-          duration,
-          bonus:
-            calculateBonus(duration),
-          paid:
+          const isPaid =
             database.payments.some(
               (payment) =>
                 payment.entryId ===
                 entry.id
+            );
+
+          return (
+            isThisWeek &&
+            !isPaid
+          );
+        }
+      );
+
+    const weeklyWallet =
+      weeklyUnpaidEntries.reduce(
+        (total, entry) =>
+          total +
+          calculateBonus(
+            getEntryDuration(
+              entry
             )
-        };
-      })
+          ),
+        0
+      );
+
+    response.json({
+      member: {
+        id: member.id,
+
+        fullName:
+          member.fullName,
+
+        grade:
+          member.grade,
+
+        division:
+          member.division
+      },
+
+      active:
+        activeEntry,
+
+      rate:
+        RATE,
+
+      stats: {
+        today:
+          sumSince(
+            startOfToday
+          ),
+
+        week:
+          sumSince(
+            startOfWeek
+          ),
+
+        month:
+          sumSince(
+            startOfMonth
+          ),
+
+        weeklyWallet
+      },
+
+      entries:
+        entries.map(
+          (entry) => {
+            const duration =
+              getEntryDuration(
+                entry
+              );
+
+            return {
+              ...entry,
+
+              duration,
+
+              bonus:
+                calculateBonus(
+                  duration
+                ),
+
+              paid:
+                database.payments.some(
+                  (payment) =>
+                    payment.entryId ===
+                    entry.id
+                )
+            };
+          }
+        )
     });
   }
 );
 
 /* =========================================================
-   DÉBUT DE SERVICE
+   COMMENCER LE SERVICE
 ========================================================= */
 
 app.post(
   "/api/member/in",
   (request, response) => {
-    const { deviceToken } =
-      request.body || {};
-
-    const database = loadDatabase();
-
-    const member = findMemberByToken(
-      database,
+    const {
       deviceToken
-    );
+    } = request.body || {};
+
+    const database =
+      loadDatabase();
+
+    const member =
+      findMemberByToken(
+        database,
+        deviceToken
+      );
 
     if (!member) {
-      return response.status(401).json({
-        error: "Accès invalide."
-      });
+      return response
+        .status(401)
+        .json({
+          error:
+            "Accès invalide."
+        });
     }
 
     const activeEntry =
       database.entries.find(
         (entry) =>
-          entry.memberId === member.id &&
+          entry.memberId ===
+            member.id &&
           !entry.end
       );
 
     if (activeEntry) {
-      return response.status(400).json({
-        error:
-          "Un service est déjà en cours."
-      });
+      return response
+        .status(400)
+        .json({
+          error:
+            "Un service est déjà en cours."
+        });
     }
 
     database.entries.push({
       id: Date.now(),
-      memberId: member.id,
-      start: new Date().toISOString(),
+
+      memberId:
+        member.id,
+
+      start:
+        new Date().toISOString(),
+
       end: null
     });
 
@@ -515,54 +641,69 @@ app.post(
 );
 
 /* =========================================================
-   FIN DE SERVICE
+   TERMINER LE SERVICE
 ========================================================= */
 
 app.post(
   "/api/member/out",
   (request, response) => {
-    const { deviceToken } =
-      request.body || {};
-
-    const database = loadDatabase();
-
-    const member = findMemberByToken(
-      database,
+    const {
       deviceToken
-    );
+    } = request.body || {};
 
-    if (!member) {
-      return response.status(401).json({
-        error: "Accès invalide."
-      });
-    }
+    const database =
+      loadDatabase();
 
-    const activeEntry =
-      database.entries.find(
-        (entry) =>
-          entry.memberId === member.id &&
-          !entry.end
+    const member =
+      findMemberByToken(
+        database,
+        deviceToken
       );
 
-    if (!activeEntry) {
-      return response.status(400).json({
-        error:
-          "Aucun service n'est actuellement en cours."
-      });
+    if (!member) {
+      return response
+        .status(401)
+        .json({
+          error:
+            "Accès invalide."
+        });
     }
 
-    activeEntry.end =
+    const entry =
+      database.entries.find(
+        (item) =>
+          item.memberId ===
+            member.id &&
+          !item.end
+      );
+
+    if (!entry) {
+      return response
+        .status(400)
+        .json({
+          error:
+            "Aucun service en cours."
+        });
+    }
+
+    entry.end =
       new Date().toISOString();
 
     saveDatabase(database);
 
     response.json({
       ok: true,
+
       duration:
-        getEntryDuration(activeEntry),
+        getEntryDuration(
+          entry
+        ),
+
       bonus:
         calculateBonus(
-          getEntryDuration(activeEntry)
+          getEntryDuration(
+            entry
+          )
         )
     });
   }
@@ -575,17 +716,23 @@ app.post(
 app.post(
   "/api/admin/login",
   (request, response) => {
-    const { password } =
-      request.body || {};
+    const password =
+      request.body?.password;
 
-    if (password !== ADMIN_PASSWORD) {
-      return response.status(401).json({
-        error:
-          "Mot de passe administrateur incorrect."
-      });
+    if (
+      password !==
+      ADMIN_PASSWORD
+    ) {
+      return response
+        .status(401)
+        .json({
+          error:
+            "Mot de passe incorrect."
+        });
     }
 
-    request.session.admin = true;
+    request.session.admin =
+      true;
 
     response.json({
       ok: true
@@ -596,7 +743,8 @@ app.post(
 app.post(
   "/api/admin/logout",
   (request, response) => {
-    request.session.admin = false;
+    request.session.admin =
+      false;
 
     response.json({
       ok: true
@@ -609,7 +757,9 @@ app.get(
   (request, response) => {
     response.json({
       admin:
-        Boolean(request.session.admin)
+        Boolean(
+          request.session.admin
+        )
     });
   }
 );
@@ -622,44 +772,107 @@ app.get(
   "/api/admin/data",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
+
+    const startOfWeek =
+      getStartOfCurrentWeek();
+
+    const members =
+      database.members.map(
+        (member) => {
+          const weeklyEntries =
+            database.entries.filter(
+              (entry) => {
+                const belongsToMember =
+                  entry.memberId ===
+                  member.id;
+
+                const isCompleted =
+                  Boolean(
+                    entry.end
+                  );
+
+                const isThisWeek =
+                  new Date(
+                    entry.start
+                  ) >= startOfWeek;
+
+                const isPaid =
+                  database.payments.some(
+                    (payment) =>
+                      payment.entryId ===
+                      entry.id
+                  );
+
+                return (
+                  belongsToMember &&
+                  isCompleted &&
+                  isThisWeek &&
+                  !isPaid
+                );
+              }
+            );
+
+          const weeklyWallet =
+            weeklyEntries.reduce(
+              (total, entry) =>
+                total +
+                calculateBonus(
+                  getEntryDuration(
+                    entry
+                  )
+                ),
+              0
+            );
+
+          return {
+            ...member,
+            weeklyWallet
+          };
+        }
+      );
 
     const entries =
       database.entries
-        .map((entry) => {
-          const member =
-            database.members.find(
-              (item) =>
-                item.id ===
-                entry.memberId
-            );
+        .map(
+          (entry) => {
+            const member =
+              database.members.find(
+                (item) =>
+                  item.id ===
+                  entry.memberId
+              );
 
-          const duration =
-            getEntryDuration(entry);
+            const duration =
+              getEntryDuration(
+                entry
+              );
 
-          return {
-            ...entry,
+            return {
+              ...entry,
 
-            memberName:
-              member?.fullName ||
-              "Membre supprimé",
+              memberName:
+                member
+                  ? member.fullName
+                  : "Membre supprimé",
 
-            grade:
-              member?.grade || "",
+              duration,
 
-            duration,
+              bonus:
+                calculateBonus(
+                  duration
+                ),
 
-            bonus:
-              calculateBonus(duration),
-
-            paid:
-              database.payments.some(
-                (payment) =>
-                  payment.entryId ===
-                  entry.id
-              )
-          };
-        })
+              paid:
+                database.payments.some(
+                  (payment) =>
+                    payment.entryId ===
+                    entry.id
+                )
+            };
+          }
+        )
         .sort(
           (a, b) =>
             new Date(b.start) -
@@ -671,16 +884,20 @@ app.get(
         database.requests
           .filter(
             (item) =>
-              item.status === "pending"
+              item.status ===
+              "pending"
           )
           .sort(
             (a, b) =>
-              new Date(b.createdAt) -
-              new Date(a.createdAt)
+              new Date(
+                b.createdAt
+              ) -
+              new Date(
+                a.createdAt
+              )
           ),
 
-      members:
-        database.members,
+      members,
 
       entries
     });
@@ -695,31 +912,30 @@ app.post(
   "/api/admin/request/:id/approve",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
     const accessRequest =
       database.requests.find(
         (item) =>
           item.id ===
-            Number(request.params.id) &&
-          item.status === "pending"
+            Number(
+              request.params.id
+            ) &&
+          item.status ===
+            "pending"
       );
 
     if (!accessRequest) {
-      return response.status(404).json({
-        error: "Demande introuvable."
-      });
+      return response
+        .status(404)
+        .json({
+          error:
+            "Demande introuvable."
+        });
     }
 
-    const tokens = [];
-
-    if (accessRequest.deviceToken) {
-      tokens.push(
-        accessRequest.deviceToken
-      );
-    }
-
-    const member = {
+    database.members.push({
       id: Date.now(),
 
       fullName:
@@ -735,13 +951,13 @@ app.post(
 
       active: true,
 
-      tokens,
+      tokens: [
+        accessRequest.deviceToken
+      ],
 
       createdAt:
         new Date().toISOString()
-    };
-
-    database.members.push(member);
+    });
 
     accessRequest.status =
       "approved";
@@ -752,8 +968,7 @@ app.post(
     saveDatabase(database);
 
     response.json({
-      ok: true,
-      member
+      ok: true
     });
   }
 );
@@ -766,19 +981,25 @@ app.post(
   "/api/admin/request/:id/reject",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
     const accessRequest =
       database.requests.find(
         (item) =>
           item.id ===
-          Number(request.params.id)
+          Number(
+            request.params.id
+          )
       );
 
     if (!accessRequest) {
-      return response.status(404).json({
-        error: "Demande introuvable."
-      });
+      return response
+        .status(404)
+        .json({
+          error:
+            "Demande introuvable."
+        });
     }
 
     accessRequest.status =
@@ -803,41 +1024,34 @@ app.put(
   "/api/admin/member/:id",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
     const member =
       database.members.find(
         (item) =>
           item.id ===
-          Number(request.params.id)
+          Number(
+            request.params.id
+          )
       );
 
     if (!member) {
-      return response.status(404).json({
-        error: "Membre introuvable."
-      });
+      return response
+        .status(404)
+        .json({
+          error:
+            "Membre introuvable."
+        });
     }
 
     if (
-      typeof request.body.active ===
+      typeof request.body
+        ?.active ===
       "boolean"
     ) {
       member.active =
         request.body.active;
-    }
-
-    if (request.body.grade) {
-      member.grade =
-        String(
-          request.body.grade
-        ).trim();
-    }
-
-    if (request.body.division) {
-      member.division =
-        String(
-          request.body.division
-        ).trim();
     }
 
     saveDatabase(database);
@@ -856,10 +1070,13 @@ app.delete(
   "/api/admin/member/:id",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
     const memberId =
-      Number(request.params.id);
+      Number(
+        request.params.id
+      );
 
     const entryIds =
       database.entries
@@ -868,12 +1085,16 @@ app.delete(
             entry.memberId ===
             memberId
         )
-        .map((entry) => entry.id);
+        .map(
+          (entry) =>
+            entry.id
+        );
 
     database.members =
       database.members.filter(
         (member) =>
-          member.id !== memberId
+          member.id !==
+          memberId
       );
 
     database.entries =
@@ -900,64 +1121,124 @@ app.delete(
 );
 
 /* =========================================================
-   PAYER / ANNULER LE PAIEMENT
+   PAYER LA CAGNOTTE HEBDOMADAIRE
 ========================================================= */
 
 app.post(
-  "/api/admin/pay/:id",
+  "/api/admin/member/:id/pay-week",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
-    const entryId =
-      Number(request.params.id);
+    const memberId =
+      Number(
+        request.params.id
+      );
 
-    const entry =
-      database.entries.find(
+    const member =
+      database.members.find(
         (item) =>
-          item.id === entryId &&
-          item.end
+          item.id ===
+          memberId
       );
 
-    if (!entry) {
-      return response.status(404).json({
-        error:
-          "Pointage introuvable ou toujours en cours."
-      });
+    if (!member) {
+      return response
+        .status(404)
+        .json({
+          error:
+            "Membre introuvable."
+        });
     }
 
-    const existingPayment =
-      database.payments.find(
-        (payment) =>
-          payment.entryId ===
-          entryId
+    const startOfWeek =
+      getStartOfCurrentWeek();
+
+    const entriesToPay =
+      database.entries.filter(
+        (entry) => {
+          const belongsToMember =
+            entry.memberId ===
+            memberId;
+
+          const isCompleted =
+            Boolean(
+              entry.end
+            );
+
+          const isThisWeek =
+            new Date(
+              entry.start
+            ) >= startOfWeek;
+
+          const isAlreadyPaid =
+            database.payments.some(
+              (payment) =>
+                payment.entryId ===
+                entry.id
+            );
+
+          return (
+            belongsToMember &&
+            isCompleted &&
+            isThisWeek &&
+            !isAlreadyPaid
+          );
+        }
       );
 
-    if (existingPayment) {
-      database.payments =
-        database.payments.filter(
-          (payment) =>
-            payment.entryId !==
-            entryId
-        );
-    } else {
-      database.payments.push({
-        id: Date.now(),
-        entryId,
-        amount:
+    const totalAmount =
+      entriesToPay.reduce(
+        (total, entry) =>
+          total +
           calculateBonus(
-            getEntryDuration(entry)
+            getEntryDuration(
+              entry
+            )
           ),
-        paidAt:
-          new Date().toISOString()
-      });
-    }
+        0
+      );
+
+    const paidAt =
+      new Date().toISOString();
+
+    entriesToPay.forEach(
+      (entry, index) => {
+        database.payments.push({
+          id:
+            Date.now() +
+            index,
+
+          entryId:
+            entry.id,
+
+          memberId,
+
+          amount:
+            calculateBonus(
+              getEntryDuration(
+                entry
+              )
+            ),
+
+          paidAt,
+
+          paymentType:
+            "weekly"
+        });
+      }
+    );
 
     saveDatabase(database);
 
     response.json({
       ok: true,
-      paid: !existingPayment
+
+      entriesPaid:
+        entriesToPay.length,
+
+      totalAmount
     });
   }
 );
@@ -970,15 +1251,19 @@ app.delete(
   "/api/admin/entry/:id",
   requireAdmin,
   (request, response) => {
-    const database = loadDatabase();
+    const database =
+      loadDatabase();
 
     const entryId =
-      Number(request.params.id);
+      Number(
+        request.params.id
+      );
 
     database.entries =
       database.entries.filter(
         (entry) =>
-          entry.id !== entryId
+          entry.id !==
+          entryId
       );
 
     database.payments =
@@ -997,23 +1282,29 @@ app.delete(
 );
 
 /* =========================================================
-   INTERFACE HTML
+   INTERFACE DU SITE
 ========================================================= */
 
-const html = `
+const html = String.raw`
 <!DOCTYPE html>
+
 <html lang="fr">
+
 <head>
+
   <meta charset="UTF-8">
 
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1.0"
+    content="width=device-width, initial-scale=1"
   >
 
-  <title>Pointeuse Cayo Perico</title>
+  <title>
+    Pointeuse Cayo Perico
+  </title>
 
   <style>
+
     :root {
       --gold: #d8b55f;
       --gold-light: #f2d891;
@@ -1030,6 +1321,7 @@ const html = `
 
     body {
       margin: 0;
+
       min-height: 100vh;
 
       color: var(--text);
@@ -1054,36 +1346,44 @@ const html = `
 
     button,
     input,
-    textarea,
-    select {
+    textarea {
       font: inherit;
     }
 
-    .container {
-      width: min(
-        1100px,
-        calc(100% - 28px)
-      );
-
-      margin: auto;
-      padding: 30px 0 70px;
-    }
-
-    .center-page {
+    .center {
       min-height: 100vh;
 
       display: flex;
+
       align-items: center;
       justify-content: center;
 
       padding: 20px;
     }
 
+    .container {
+      width:
+        min(
+          1100px,
+          calc(100% - 28px)
+        );
+
+      margin: auto;
+
+      padding:
+        30px 0 70px;
+    }
+
     .panel,
     .card {
       border:
         1px solid
-        rgba(216, 181, 95, 0.25);
+        rgba(
+          216,
+          181,
+          95,
+          0.25
+        );
 
       border-radius: 18px;
 
@@ -1096,14 +1396,16 @@ const html = `
 
     .panel {
       padding: 25px;
+
       margin-top: 16px;
     }
 
-    .login-panel {
-      width: min(
-        600px,
-        100%
-      );
+    .login {
+      width:
+        min(
+          600px,
+          100%
+        );
 
       padding: 32px;
     }
@@ -1112,28 +1414,29 @@ const html = `
       color: var(--gold);
 
       font-size: 12px;
+
       font-weight: 900;
+
       letter-spacing: 2px;
 
       text-transform: uppercase;
     }
 
     h1 {
-      margin: 8px 0 12px;
+      margin:
+        8px 0 12px;
 
-      color: var(--gold-light);
+      color:
+        var(--gold-light);
 
-      font-size: clamp(
-        38px,
-        7vw,
-        68px
-      );
+      font-size:
+        clamp(
+          38px,
+          7vw,
+          68px
+        );
 
       line-height: 1;
-    }
-
-    h2 {
-      margin-top: 0;
     }
 
     .muted {
@@ -1142,54 +1445,76 @@ const html = `
 
     .buttons {
       display: flex;
+
       gap: 10px;
+
       flex-wrap: wrap;
 
       margin-top: 18px;
     }
 
     .button {
-      border: none;
+      border: 0;
+
       border-radius: 10px;
 
-      padding: 12px 16px;
+      padding:
+        12px 16px;
 
       cursor: pointer;
 
       color: #142017;
-      background: var(--gold);
+
+      background:
+        var(--gold);
 
       font-weight: 800;
     }
 
     .button.green {
       color: white;
-      background: var(--green);
+
+      background:
+        var(--green);
     }
 
     .button.red {
       color: white;
-      background: var(--red);
+
+      background:
+        var(--red);
     }
 
     .button.secondary {
       color: white;
 
       background:
-        rgba(255, 255, 255, 0.08);
+        rgba(
+          255,
+          255,
+          255,
+          0.08
+        );
 
       border:
         1px solid
-        rgba(255, 255, 255, 0.12);
+        rgba(
+          255,
+          255,
+          255,
+          0.12
+        );
     }
 
     .button.full {
       width: 100%;
+
       margin-top: 12px;
     }
 
     .field {
       display: grid;
+
       gap: 7px;
 
       margin-top: 13px;
@@ -1197,23 +1522,30 @@ const html = `
 
     .field label {
       color: var(--muted);
+
       font-size: 13px;
+
       font-weight: 700;
     }
 
     .field input,
-    .field textarea,
-    .field select {
+    .field textarea {
       width: 100%;
 
       padding: 12px;
 
       color: white;
+
       background: #081510;
 
       border:
         1px solid
-        rgba(255, 255, 255, 0.15);
+        rgba(
+          255,
+          255,
+          255,
+          0.15
+        );
 
       border-radius: 10px;
 
@@ -1222,15 +1554,13 @@ const html = `
 
     .field textarea {
       min-height: 90px;
+
       resize: vertical;
     }
 
-    .hidden {
-      display: none;
-    }
-
-    .statistics {
+    .stats {
       display: grid;
+
       grid-template-columns:
         repeat(4, 1fr);
 
@@ -1247,6 +1577,7 @@ const html = `
       color: var(--muted);
 
       font-size: 11px;
+
       font-weight: 800;
 
       text-transform: uppercase;
@@ -1257,26 +1588,31 @@ const html = `
 
       margin-top: 9px;
 
-      color: var(--gold-light);
+      color:
+        var(--gold-light);
 
       font-size: 28px;
     }
 
     .clock {
-      color: var(--gold-light);
+      color:
+        var(--gold-light);
 
       font-size: 42px;
+
       font-weight: 900;
 
-      margin: 10px 0;
+      margin:
+        10px 0;
     }
 
-    .table-wrapper {
+    .table-wrap {
       overflow-x: auto;
     }
 
     table {
       width: 100%;
+
       min-width: 760px;
 
       border-collapse: collapse;
@@ -1290,7 +1626,12 @@ const html = `
 
       border-bottom:
         1px solid
-        rgba(255, 255, 255, 0.08);
+        rgba(
+          255,
+          255,
+          255,
+          0.08
+        );
     }
 
     th {
@@ -1303,30 +1644,44 @@ const html = `
 
     .request-card {
       display: flex;
-      justify-content: space-between;
+
+      justify-content:
+        space-between;
+
       gap: 15px;
 
       margin-top: 10px;
+
       padding: 15px;
 
       border:
         1px solid
-        rgba(255, 255, 255, 0.1);
+        rgba(
+          255,
+          255,
+          255,
+          0.1
+        );
 
       border-radius: 12px;
     }
 
-    @media (max-width: 800px) {
-      .statistics {
+    @media (
+      max-width: 800px
+    ) {
+      .stats {
         grid-template-columns:
           repeat(2, 1fr);
       }
 
       .request-card {
-        flex-direction: column;
+        flex-direction:
+          column;
       }
     }
+
   </style>
+
 </head>
 
 <body>
@@ -1334,42 +1689,63 @@ const html = `
   <main id="app"></main>
 
   <script>
+
     const app =
-      document.getElementById("app");
+      document.getElementById(
+        "app"
+      );
 
     let timer = null;
 
-    function formatMoney(value) {
-      return new Intl.NumberFormat(
-        "fr-FR"
-      ).format(
-        Math.round(value)
-      ) + " $";
+    function formatMoney(
+      value
+    ) {
+      return new Intl
+        .NumberFormat(
+          "fr-FR"
+        )
+        .format(
+          Math.round(
+            value
+          )
+        ) +
+        " $";
     }
 
-    function formatDuration(ms) {
+    function formatDuration(
+      milliseconds
+    ) {
       const totalMinutes =
-        Math.floor(ms / 60000);
+        Math.floor(
+          milliseconds /
+          60000
+        );
 
       const hours =
         Math.floor(
-          totalMinutes / 60
+          totalMinutes /
+          60
         );
 
       const minutes =
-        totalMinutes % 60;
+        totalMinutes %
+        60;
 
       return (
         hours +
         " h " +
-        String(minutes).padStart(
+        String(
+          minutes
+        ).padStart(
           2,
           "0"
         )
       );
     }
 
-    function formatDate(value) {
+    function formatDate(
+      value
+    ) {
       return new Date(
         value
       ).toLocaleString(
@@ -1382,19 +1758,24 @@ const html = `
       options = {}
     ) {
       const response =
-        await fetch(url, {
-          headers: {
-            "Content-Type":
-              "application/json"
-          },
+        await fetch(
+          url,
+          {
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
 
-          ...options
-        });
+            ...options
+          }
+        );
 
       const data =
         await response
           .json()
-          .catch(() => ({}));
+          .catch(
+            () => ({})
+          );
 
       if (!response.ok) {
         throw new Error(
@@ -1406,14 +1787,16 @@ const html = `
       return data;
     }
 
-    function alertMessage(message) {
+    function showMessage(
+      message
+    ) {
       alert(message);
     }
 
-    function createLocalDeviceToken() {
+    function getDeviceToken() {
       let token =
         localStorage.getItem(
-          "cayoPendingDeviceToken"
+          "cayoDeviceToken"
         );
 
       if (!token) {
@@ -1426,7 +1809,7 @@ const html = `
             .slice(2);
 
         localStorage.setItem(
-          "cayoPendingDeviceToken",
+          "cayoDeviceToken",
           token
         );
       }
@@ -1434,254 +1817,136 @@ const html = `
       return token;
     }
 
-    function home() {
-      app.innerHTML = \`
-        <div class="center-page">
-          <section class="panel login-panel">
+    function homePage() {
+      app.innerHTML =
+        '<div class="center">' +
 
-            <div class="eyebrow">
-              Milice de Cayo Perico
-            </div>
+          '<section class="panel login">' +
 
-            <h1>
-              Pointeuse officielle
-            </h1>
+            '<div class="eyebrow">' +
+              'Milice de Cayo Perico' +
+            '</div>' +
 
-            <p class="muted">
-              Accédez à votre espace ou envoyez une demande d'accès.
-            </p>
+            '<h1>' +
+              'Pointeuse officielle' +
+            '</h1>' +
 
-            <div class="buttons">
+            '<p class="muted">' +
+              'Votre appareil doit être validé par le Général avant tout accès.' +
+            '</p>' +
 
-              <button
-                class="button green"
-                onclick="showHomeSection('connect')"
-              >
-                Entrer
-              </button>
+            '<div class="field">' +
 
-              <button
-                class="button secondary"
-                onclick="showHomeSection('request')"
-              >
-                Demande d'accès
-              </button>
+              '<label>' +
+                'Prénom RP' +
+              '</label>' +
 
-              <button
-                class="button secondary"
-                onclick="adminLoginPage()"
-              >
-                Administration
-              </button>
+              '<input id="firstName">' +
 
-            </div>
+            '</div>' +
 
-            <div
-              id="connectSection"
-              class="panel"
-            >
-              <div class="field">
+            '<div class="field">' +
 
-                <label>
-                  Nom RP complet
-                </label>
+              '<label>' +
+                'Nom RP' +
+              '</label>' +
 
-                <input
-                  id="memberName"
-                  placeholder="Exemple : Juan Pedro"
-                >
+              '<input id="lastName">' +
 
-              </div>
+            '</div>' +
 
-              <button
-                class="button full"
-                onclick="manualConnect()"
-              >
-                Se connecter
-              </button>
-            </div>
+            '<div class="field">' +
 
-            <div
-              id="requestSection"
-              class="panel hidden"
-            >
+              '<label>' +
+                'Téléphone RP' +
+              '</label>' +
 
-              <div class="field">
+              '<input id="phone">' +
 
-                <label>
-                  Prénom RP
-                </label>
+            '</div>' +
 
-                <input id="firstName">
+            '<div class="field">' +
 
-              </div>
+              '<label>' +
+                'Message' +
+              '</label>' +
 
-              <div class="field">
+              '<textarea id="message"></textarea>' +
 
-                <label>
-                  Nom RP
-                </label>
+            '</div>' +
 
-                <input id="lastName">
+            '<button class="button full" onclick="sendRequest()">' +
+              'Envoyer une demande d’accès' +
+            '</button>' +
 
-              </div>
+            '<button class="button secondary full" onclick="adminLoginPage()">' +
+              'Administration' +
+            '</button>' +
 
-              <div class="field">
+          '</section>' +
 
-                <label>
-                  Téléphone RP
-                </label>
-
-                <input id="phone">
-
-              </div>
-
-              <div class="field">
-
-                <label>
-                  Message
-                </label>
-
-                <textarea id="message"></textarea>
-
-              </div>
-
-              <button
-                class="button full"
-                onclick="sendAccessRequest()"
-              >
-                Envoyer la demande
-              </button>
-
-            </div>
-
-          </section>
-        </div>
-      \`;
+        '</div>';
     }
 
-    window.showHomeSection =
-      function (section) {
-        document
-          .getElementById(
-            "connectSection"
-          )
-          .classList.toggle(
-            "hidden",
-            section !== "connect"
-          );
-
-        document
-          .getElementById(
-            "requestSection"
-          )
-          .classList.toggle(
-            "hidden",
-            section !== "request"
-          );
-      };
-
-    window.sendAccessRequest =
+    window.sendRequest =
       async function () {
         try {
-          const deviceToken =
-            createLocalDeviceToken();
-
           await api(
             "/api/request",
             {
-              method: "POST",
+              method:
+                "POST",
 
-              body: JSON.stringify({
-                firstName:
-                  document.getElementById(
-                    "firstName"
-                  ).value,
+              body:
+                JSON.stringify({
+                  firstName:
+                    document
+                      .getElementById(
+                        "firstName"
+                      )
+                      .value,
 
-                lastName:
-                  document.getElementById(
-                    "lastName"
-                  ).value,
+                  lastName:
+                    document
+                      .getElementById(
+                        "lastName"
+                      )
+                      .value,
 
-                phone:
-                  document.getElementById(
-                    "phone"
-                  ).value,
+                  phone:
+                    document
+                      .getElementById(
+                        "phone"
+                      )
+                      .value,
 
-                message:
-                  document.getElementById(
-                    "message"
-                  ).value,
+                  message:
+                    document
+                      .getElementById(
+                        "message"
+                      )
+                      .value,
 
-                deviceToken
-              })
+                  deviceToken:
+                    getDeviceToken()
+                })
             }
           );
 
-          alertMessage(
-            "Demande envoyée. Une fois acceptée, recharge simplement le site."
+          showMessage(
+            "Demande envoyée. Une fois acceptée, recharge simplement la page."
           );
         } catch (error) {
-          alertMessage(
+          showMessage(
             error.message
           );
         }
       };
 
-    window.manualConnect =
-      async function () {
-        try {
-          const oldToken =
-            localStorage.getItem(
-              "cayoToken"
-            ) || "";
-
-          const response =
-            await api(
-              "/api/connect",
-              {
-                method: "POST",
-
-                body:
-                  JSON.stringify({
-                    fullName:
-                      document
-                        .getElementById(
-                          "memberName"
-                        )
-                        .value
-                        .trim(),
-
-                    deviceToken:
-                      oldToken
-                  })
-              }
-            );
-
-          localStorage.setItem(
-            "cayoToken",
-            response.deviceToken
-          );
-
-          localStorage.removeItem(
-            "cayoPendingDeviceToken"
-          );
-
-          memberPage();
-        } catch (error) {
-          alertMessage(
-            error.message
-          );
-        }
-      };
-
-    async function tryAutomaticLogin() {
+    async function automaticLogin() {
       const token =
         localStorage.getItem(
-          "cayoToken"
-        ) ||
-        localStorage.getItem(
-          "cayoPendingDeviceToken"
+          "cayoDeviceToken"
         );
 
       if (!token) {
@@ -1689,30 +1954,22 @@ const html = `
       }
 
       try {
-        const response =
-          await api(
-            "/api/member/automatic-connect",
-            {
-              method: "POST",
+        await api(
+          "/api/member/automatic-connect",
+          {
+            method:
+              "POST",
 
-              body:
-                JSON.stringify({
-                  deviceToken: token
-                })
-            }
-          );
-
-        localStorage.setItem(
-          "cayoToken",
-          token
-        );
-
-        localStorage.removeItem(
-          "cayoPendingDeviceToken"
+            body:
+              JSON.stringify({
+                deviceToken:
+                  token
+              })
+          }
         );
 
         return true;
-      } catch {
+      } catch (error) {
         return false;
       }
     }
@@ -1720,11 +1977,11 @@ const html = `
     async function memberPage() {
       const token =
         localStorage.getItem(
-          "cayoToken"
+          "cayoDeviceToken"
         );
 
       if (!token) {
-        home();
+        homePage();
         return;
       }
 
@@ -1733,11 +1990,13 @@ const html = `
           await api(
             "/api/member/dashboard",
             {
-              method: "POST",
+              method:
+                "POST",
 
               body:
                 JSON.stringify({
-                  deviceToken: token
+                  deviceToken:
+                    token
                 })
             }
           );
@@ -1752,310 +2011,284 @@ const html = `
                 entry.end
             )
             .map(
-              (entry) => \`
-                <tr>
-                  <td>
-                    \${formatDate(
+              (entry) =>
+                "<tr>" +
+
+                  "<td>" +
+                    formatDate(
                       entry.start
-                    )}
-                  </td>
+                    ) +
+                  "</td>" +
 
-                  <td>
-                    \${formatDate(
+                  "<td>" +
+                    formatDate(
                       entry.end
-                    )}
-                  </td>
+                    ) +
+                  "</td>" +
 
-                  <td>
-                    \${formatDuration(
+                  "<td>" +
+                    formatDuration(
                       entry.duration
-                    )}
-                  </td>
+                    ) +
+                  "</td>" +
 
-                  <td>
-                    \${formatMoney(
+                  "<td>" +
+                    formatMoney(
                       entry.bonus
-                    )}
-                  </td>
+                    ) +
+                  "</td>" +
 
-                  <td>
-                    \${entry.paid
-                      ? "Payé"
-                      : "En attente"}
-                  </td>
-                </tr>
-              \`
+                  "<td>" +
+                    (
+                      entry.paid
+                        ? "Payé"
+                        : "En attente"
+                    ) +
+                  "</td>" +
+
+                "</tr>"
             )
             .join("");
 
-        app.innerHTML = \`
-          <div class="container">
+        app.innerHTML =
+          '<div class="container">' +
 
-            <div class="eyebrow">
-              Pointeuse officielle
-            </div>
+            '<div class="eyebrow">' +
+              'Pointeuse officielle' +
+            '</div>' +
 
-            <h1>
-              \${data.member.fullName}
-            </h1>
+            '<h1>' +
+              data.member.fullName +
+            '</h1>' +
 
-            <p class="muted">
-              \${data.member.grade}
-              ·
-              \${data.member.division}
-            </p>
+            '<p class="muted">' +
+              data.member.grade +
+              ' · ' +
+              data.member.division +
+            '</p>' +
 
-            <section class="statistics">
+            '<section class="stats">' +
 
-              <article class="card">
-                <small>
-                  Aujourd'hui
-                </small>
-
-                <strong>
-                  \${formatDuration(
+              '<article class="card">' +
+                '<small>Aujourd’hui</small>' +
+                '<strong>' +
+                  formatDuration(
                     data.stats.today
-                  )}
-                </strong>
-              </article>
+                  ) +
+                '</strong>' +
+              '</article>' +
 
-              <article class="card">
-                <small>
-                  Cette semaine
-                </small>
-
-                <strong>
-                  \${formatDuration(
+              '<article class="card">' +
+                '<small>Cette semaine</small>' +
+                '<strong>' +
+                  formatDuration(
                     data.stats.week
-                  )}
-                </strong>
-              </article>
+                  ) +
+                '</strong>' +
+              '</article>' +
 
-              <article class="card">
-                <small>
-                  Ce mois
-                </small>
-
-                <strong>
-                  \${formatDuration(
+              '<article class="card">' +
+                '<small>Ce mois</small>' +
+                '<strong>' +
+                  formatDuration(
                     data.stats.month
-                  )}
-                </strong>
-              </article>
+                  ) +
+                '</strong>' +
+              '</article>' +
 
-              <article class="card">
-                <small>
-                  Prime totale
-                </small>
+              '<article class="card">' +
+                '<small>Cagnotte semaine</small>' +
+                '<strong>' +
+                  formatMoney(
+                    data.stats.weeklyWallet
+                  ) +
+                '</strong>' +
+              '</article>' +
 
-                <strong>
-                  \${formatMoney(
-                    data.stats.totalBonus
-                  )}
-                </strong>
-              </article>
+            '</section>' +
 
-            </section>
+            '<section class="panel">' +
 
-            <section class="panel">
+              '<h2>' +
+                (
+                  active
+                    ? "Service en cours"
+                    : "Hors service"
+                ) +
+              '</h2>' +
 
-              <h2>
-                \${active
-                  ? "Service en cours"
-                  : "Hors service"}
-              </h2>
-
-              <div
-                id="clock"
-                class="clock"
-              >
-                \${active
-                  ? formatDuration(
-                      Date.now() -
-                      new Date(
-                        active.start
+              '<div id="clock" class="clock">' +
+                (
+                  active
+                    ? formatDuration(
+                        Date.now() -
+                        new Date(
+                          active.start
+                        )
                       )
-                    )
-                  : "0 h 00"}
-              </div>
+                    : "0 h 00"
+                ) +
+              '</div>' +
 
-              <p class="muted">
-                Prime fixe :
-                12 500 $ / heure
-              </p>
+              '<p class="muted">' +
+                'Prime fixe : 12 500 $ / heure' +
+              '</p>' +
 
-              <button
-                class="button
-                \${active
-                  ? "red"
-                  : "green"}"
-                onclick="toggleService(
-                  \${Boolean(active)}
-                )"
-              >
-                \${active
-                  ? "Terminer le service"
-                  : "Commencer le service"}
-              </button>
+              '<button class="button ' +
+                (
+                  active
+                    ? "red"
+                    : "green"
+                ) +
+                '" onclick="toggleService(' +
+                (
+                  active
+                    ? "true"
+                    : "false"
+                ) +
+                ')">' +
 
-              <button
-                class="button secondary"
-                onclick="logoutMember()"
-              >
-                Déconnexion
-              </button>
+                (
+                  active
+                    ? "Terminer le service"
+                    : "Commencer le service"
+                ) +
 
-            </section>
+              '</button>' +
 
-            <section class="panel">
+            '</section>' +
 
-              <h2>
-                Historique
-              </h2>
+            '<section class="panel">' +
 
-              <div class="table-wrapper">
+              '<h2>' +
+                'Historique' +
+              '</h2>' +
 
-                <table>
+              '<div class="table-wrap">' +
 
-                  <thead>
+                '<table>' +
 
-                    <tr>
-                      <th>Arrivée</th>
-                      <th>Départ</th>
-                      <th>Durée</th>
-                      <th>Prime</th>
-                      <th>Paiement</th>
-                    </tr>
+                  '<thead>' +
 
-                  </thead>
+                    '<tr>' +
+                      '<th>Arrivée</th>' +
+                      '<th>Départ</th>' +
+                      '<th>Durée</th>' +
+                      '<th>Prime</th>' +
+                      '<th>Paiement</th>' +
+                    '</tr>' +
 
-                  <tbody>
-                    \${rows}
-                  </tbody>
+                  '</thead>' +
 
-                </table>
+                  '<tbody>' +
+                    rows +
+                  '</tbody>' +
 
-              </div>
+                '</table>' +
 
-            </section>
+              '</div>' +
 
-          </div>
-        \`;
+            '</section>' +
+
+          '</div>';
 
         clearInterval(timer);
 
         if (active) {
-          timer = setInterval(
-            () => {
-              const clock =
-                document.getElementById(
-                  "clock"
-                );
+          timer =
+            setInterval(
+              function () {
+                const clock =
+                  document
+                    .getElementById(
+                      "clock"
+                    );
 
-              if (clock) {
-                clock.textContent =
-                  formatDuration(
-                    Date.now() -
-                    new Date(
-                      active.start
-                    )
-                  );
-              }
-            },
-            1000
-          );
+                if (clock) {
+                  clock.textContent =
+                    formatDuration(
+                      Date.now() -
+                      new Date(
+                        active.start
+                      )
+                    );
+                }
+              },
+              1000
+            );
         }
       } catch (error) {
-        localStorage.removeItem(
-          "cayoToken"
-        );
-
-        home();
+        homePage();
       }
     }
 
     window.toggleService =
-      async function (active) {
+      async function (
+        active
+      ) {
         try {
           await api(
             active
               ? "/api/member/out"
               : "/api/member/in",
             {
-              method: "POST",
+              method:
+                "POST",
 
               body:
                 JSON.stringify({
                   deviceToken:
-                    localStorage.getItem(
-                      "cayoToken"
-                    )
+                    localStorage
+                      .getItem(
+                        "cayoDeviceToken"
+                      )
                 })
             }
           );
 
           memberPage();
         } catch (error) {
-          alertMessage(
+          showMessage(
             error.message
           );
         }
       };
 
-    window.logoutMember =
-      function () {
-        localStorage.removeItem(
-          "cayoToken"
-        );
-
-        home();
-      };
-
     function adminLoginPage() {
-      app.innerHTML = \`
-        <div class="center-page">
+      app.innerHTML =
+        '<div class="center">' +
 
-          <section class="panel login-panel">
+          '<section class="panel login">' +
 
-            <div class="eyebrow">
-              Administration
-            </div>
+            '<div class="eyebrow">' +
+              'Administration' +
+            '</div>' +
 
-            <h1>
-              Accès Général
-            </h1>
+            '<h1>' +
+              'Accès Général' +
+            '</h1>' +
 
-            <div class="field">
+            '<div class="field">' +
 
-              <label>
-                Mot de passe
-              </label>
+              '<label>' +
+                'Mot de passe' +
+              '</label>' +
 
-              <input
-                id="adminPassword"
-                type="password"
-              >
+              '<input id="adminPassword" type="password">' +
 
-            </div>
+            '</div>' +
 
-            <button
-              class="button full"
-              onclick="adminLogin()"
-            >
-              Se connecter
-            </button>
+            '<button class="button full" onclick="adminLogin()">' +
+              'Se connecter' +
+            '</button>' +
 
-            <button
-              class="button secondary full"
-              onclick="home()"
-            >
-              Retour
-            </button>
+            '<button class="button secondary full" onclick="homePage()">' +
+              'Retour' +
+            '</button>' +
 
-          </section>
+          '</section>' +
 
-        </div>
-      \`;
+        '</div>';
     }
 
     window.adminLogin =
@@ -2064,21 +2297,24 @@ const html = `
           await api(
             "/api/admin/login",
             {
-              method: "POST",
+              method:
+                "POST",
 
               body:
                 JSON.stringify({
                   password:
-                    document.getElementById(
-                      "adminPassword"
-                    ).value
+                    document
+                      .getElementById(
+                        "adminPassword"
+                      )
+                      .value
                 })
             }
           );
 
           adminPage();
         } catch (error) {
-          alertMessage(
+          showMessage(
             error.message
           );
         }
@@ -2099,428 +2335,402 @@ const html = `
               !entry.end
           );
 
-        const unpaidTotal =
-          data.entries
-            .filter(
-              (entry) =>
-                entry.end &&
-                !entry.paid
-            )
-            .reduce(
-              (total, entry) =>
-                total +
-                entry.bonus,
-              0
-            );
+        const totalWallet =
+          data.members.reduce(
+            (total, member) =>
+              total +
+              (
+                member.weeklyWallet ||
+                0
+              ),
+            0
+          );
 
         let content = "";
 
-        if (tab === "dashboard") {
-          content = \`
-            <section class="statistics">
+        if (
+          tab ===
+          "dashboard"
+        ) {
+          content =
+            '<section class="stats">' +
 
-              <article class="card">
-                <small>
-                  Miliciens
-                </small>
-
-                <strong>
-                  \${data.members.filter(
-                    (member) =>
-                      member.active
-                  ).length}
-                </strong>
-              </article>
-
-              <article class="card">
-                <small>
-                  En service
-                </small>
-
-                <strong>
-                  \${activeEntries.length}
-                </strong>
-              </article>
-
-              <article class="card">
-                <small>
-                  Demandes
-                </small>
-
-                <strong>
-                  \${data.requests.length}
-                </strong>
-              </article>
-
-              <article class="card">
-                <small>
-                  À payer
-                </small>
-
-                <strong>
-                  \${formatMoney(
-                    unpaidTotal
-                  )}
-                </strong>
-              </article>
-
-            </section>
-
-            <section class="panel">
-
-              <h2>
-                Miliciens en service
-              </h2>
-
-              \${activeEntries.length
-                ? activeEntries
-                    .map(
-                      (entry) => \`
-                        <div class="request-card">
-
-                          <strong>
-                            \${entry.memberName}
-                          </strong>
-
-                          <span>
-                            \${formatDuration(
-                              entry.duration
-                            )}
-                          </span>
-
-                        </div>
-                      \`
+              '<article class="card">' +
+                '<small>Miliciens</small>' +
+                '<strong>' +
+                  data.members
+                    .filter(
+                      (member) =>
+                        member.active
                     )
-                    .join("")
-                : '<p class="muted">Aucun milicien en service.</p>'}
+                    .length +
+                '</strong>' +
+              '</article>' +
 
-            </section>
-          \`;
-        }
+              '<article class="card">' +
+                '<small>En service</small>' +
+                '<strong>' +
+                  activeEntries.length +
+                '</strong>' +
+              '</article>' +
 
-        if (tab === "requests") {
-          content = \`
-            <section class="panel">
+              '<article class="card">' +
+                '<small>Demandes</small>' +
+                '<strong>' +
+                  data.requests.length +
+                '</strong>' +
+              '</article>' +
 
-              <h2>
-                Demandes en attente
-              </h2>
+              '<article class="card">' +
+                '<small>Cagnottes à payer</small>' +
+                '<strong>' +
+                  formatMoney(
+                    totalWallet
+                  ) +
+                '</strong>' +
+              '</article>' +
 
-              \${data.requests.length
-                ? data.requests
-                    .map(
-                      (request) => \`
-                        <div class="request-card">
+            '</section>' +
 
-                          <div>
+            '<section class="panel">' +
 
-                            <strong>
-                              \${request.fullName}
-                            </strong>
+              '<h2>' +
+                'Miliciens en service' +
+              '</h2>' +
 
-                            <div class="muted">
-                              \${formatDate(
-                                request.createdAt
-                              )}
-                            </div>
-
-                            <p>
-                              \${request.message || ""}
-                            </p>
-
-                          </div>
-
-                          <div class="buttons">
-
-                            <button
-                              class="button green"
-                              onclick="approveRequest(
-                                \${request.id}
-                              )"
-                            >
-                              Accepter
-                            </button>
-
-                            <button
-                              class="button red"
-                              onclick="rejectRequest(
-                                \${request.id}
-                              )"
-                            >
-                              Refuser
-                            </button>
-
-                          </div>
-
-                        </div>
-                      \`
-                    )
-                    .join("")
-                : '<p class="muted">Aucune demande en attente.</p>'}
-
-            </section>
-          \`;
-        }
-
-        if (tab === "members") {
-          content = \`
-            <section class="panel">
-
-              <div class="table-wrapper">
-
-                <table>
-
-                  <thead>
-
-                    <tr>
-                      <th>Nom</th>
-                      <th>Grade</th>
-                      <th>Division</th>
-                      <th>Statut</th>
-                      <th>Actions</th>
-                    </tr>
-
-                  </thead>
-
-                  <tbody>
-
-                    \${data.members
+              (
+                activeEntries.length
+                  ? activeEntries
                       .map(
-                        (member) => \`
-                          <tr>
+                        (entry) =>
+                          '<div class="request-card">' +
 
-                            <td>
-                              \${member.fullName}
-                            </td>
+                            '<strong>' +
+                              entry.memberName +
+                            '</strong>' +
 
-                            <td>
-                              \${member.grade}
-                            </td>
-
-                            <td>
-                              \${member.division}
-                            </td>
-
-                            <td>
-                              \${member.active
-                                ? "Actif"
-                                : "Désactivé"}
-                            </td>
-
-                            <td>
-
-                              <button
-                                class="button secondary"
-                                onclick="toggleMember(
-                                  \${member.id},
-                                  \${member.active}
-                                )"
-                              >
-                                \${member.active
-                                  ? "Désactiver"
-                                  : "Réactiver"}
-                              </button>
-
-                              <button
-                                class="button red"
-                                onclick="deleteMember(
-                                  \${member.id}
-                                )"
-                              >
-                                Supprimer
-                              </button>
-
-                            </td>
-
-                          </tr>
-                        \`
-                      )
-                      .join("")}
-
-                  </tbody>
-
-                </table>
-
-              </div>
-
-            </section>
-          \`;
-        }
-
-        if (tab === "entries") {
-          content = \`
-            <section class="panel">
-
-              <div class="table-wrapper">
-
-                <table>
-
-                  <thead>
-
-                    <tr>
-                      <th>Milicien</th>
-                      <th>Début</th>
-                      <th>Fin</th>
-                      <th>Durée</th>
-                      <th>Prime</th>
-                      <th>Paiement</th>
-                      <th>Actions</th>
-                    </tr>
-
-                  </thead>
-
-                  <tbody>
-
-                    \${data.entries
-                      .map(
-                        (entry) => \`
-                          <tr>
-
-                            <td>
-                              \${entry.memberName}
-                            </td>
-
-                            <td>
-                              \${formatDate(
-                                entry.start
-                              )}
-                            </td>
-
-                            <td>
-                              \${entry.end
-                                ? formatDate(
-                                    entry.end
-                                  )
-                                : "En cours"}
-                            </td>
-
-                            <td>
-                              \${formatDuration(
+                            '<span>' +
+                              formatDuration(
                                 entry.duration
-                              )}
-                            </td>
+                              ) +
+                            '</span>' +
 
-                            <td>
-                              \${entry.end
-                                ? formatMoney(
-                                    entry.bonus
-                                  )
-                                : "-"}
-                            </td>
-
-                            <td>
-
-                              \${entry.end
-                                ? \`
-                                  <button
-                                    class="button
-                                    \${entry.paid
-                                      ? "green"
-                                      : "secondary"}"
-                                    onclick="togglePayment(
-                                      \${entry.id}
-                                    )"
-                                  >
-                                    \${entry.paid
-                                      ? "Payé"
-                                      : "Marquer payé"}
-                                  </button>
-                                \`
-                                : "-"}
-
-                            </td>
-
-                            <td>
-
-                              <button
-                                class="button red"
-                                onclick="deleteEntry(
-                                  \${entry.id}
-                                )"
-                              >
-                                Supprimer
-                              </button>
-
-                            </td>
-
-                          </tr>
-                        \`
+                          '</div>'
                       )
-                      .join("")}
+                      .join("")
+                  : '<p class="muted">Aucun milicien en service.</p>'
+              ) +
 
-                  </tbody>
-
-                </table>
-
-              </div>
-
-            </section>
-          \`;
+            '</section>';
         }
 
-        app.innerHTML = \`
-          <div class="container">
+        if (
+          tab ===
+          "requests"
+        ) {
+          content =
+            '<section class="panel">' +
 
-            <div class="eyebrow">
-              Milice de Cayo Perico
-            </div>
+              '<h2>' +
+                'Demandes en attente' +
+              '</h2>' +
 
-            <h1>
-              Administration
-            </h1>
+              (
+                data.requests.length
+                  ? data.requests
+                      .map(
+                        (request) =>
+                          '<div class="request-card">' +
 
-            <div class="buttons">
+                            '<div>' +
 
-              <button
-                class="button secondary"
-                onclick="adminPage(
-                  'dashboard'
-                )"
-              >
-                Vue générale
-              </button>
+                              '<strong>' +
+                                request.fullName +
+                              '</strong>' +
 
-              <button
-                class="button secondary"
-                onclick="adminPage(
-                  'requests'
-                )"
-              >
-                Demandes
-              </button>
+                              '<div class="muted">' +
+                                formatDate(
+                                  request.createdAt
+                                ) +
+                              '</div>' +
 
-              <button
-                class="button secondary"
-                onclick="adminPage(
-                  'members'
-                )"
-              >
-                Miliciens
-              </button>
+                              '<p>' +
+                                (
+                                  request.message ||
+                                  ""
+                                ) +
+                              '</p>' +
 
-              <button
-                class="button secondary"
-                onclick="adminPage(
-                  'entries'
-                )"
-              >
-                Pointages
-              </button>
+                            '</div>' +
 
-              <button
-                class="button red"
-                onclick="adminLogout()"
-              >
-                Déconnexion
-              </button>
+                            '<div class="buttons">' +
 
-            </div>
+                              '<button class="button green" onclick="approveRequest(' +
+                                request.id +
+                              ')">' +
+                                'Accepter' +
+                              '</button>' +
 
-            \${content}
+                              '<button class="button red" onclick="rejectRequest(' +
+                                request.id +
+                              ')">' +
+                                'Refuser' +
+                              '</button>' +
 
-          </div>
-        \`;
-      } catch {
+                            '</div>' +
+
+                          '</div>'
+                      )
+                      .join("")
+                  : '<p class="muted">Aucune demande en attente.</p>'
+              ) +
+
+            '</section>';
+        }
+
+        if (
+          tab ===
+          "members"
+        ) {
+          content =
+            '<section class="panel">' +
+
+              '<div class="table-wrap">' +
+
+                '<table>' +
+
+                  '<thead>' +
+
+                    '<tr>' +
+                      '<th>Nom</th>' +
+                      '<th>Grade</th>' +
+                      '<th>Division</th>' +
+                      '<th>Cagnotte semaine</th>' +
+                      '<th>Statut</th>' +
+                      '<th>Actions</th>' +
+                    '</tr>' +
+
+                  '</thead>' +
+
+                  '<tbody>' +
+
+                    data.members
+                      .map(
+                        (member) =>
+                          '<tr>' +
+
+                            '<td>' +
+                              member.fullName +
+                            '</td>' +
+
+                            '<td>' +
+                              member.grade +
+                            '</td>' +
+
+                            '<td>' +
+                              member.division +
+                            '</td>' +
+
+                            '<td>' +
+                              formatMoney(
+                                member.weeklyWallet ||
+                                0
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+                              (
+                                member.active
+                                  ? "Actif"
+                                  : "Désactivé"
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+
+                              '<button class="button green" onclick="payWeek(' +
+                                member.id +
+                              ')">' +
+                                'Payer la semaine' +
+                              '</button> ' +
+
+                              '<button class="button secondary" onclick="toggleMember(' +
+                                member.id +
+                                ',' +
+                                member.active +
+                              ')">' +
+
+                                (
+                                  member.active
+                                    ? "Désactiver"
+                                    : "Réactiver"
+                                ) +
+
+                              '</button> ' +
+
+                              '<button class="button red" onclick="deleteMember(' +
+                                member.id +
+                              ')">' +
+                                'Supprimer' +
+                              '</button>' +
+
+                            '</td>' +
+
+                          '</tr>'
+                      )
+                      .join("") +
+
+                  '</tbody>' +
+
+                '</table>' +
+
+              '</div>' +
+
+            '</section>';
+        }
+
+        if (
+          tab ===
+          "entries"
+        ) {
+          content =
+            '<section class="panel">' +
+
+              '<div class="table-wrap">' +
+
+                '<table>' +
+
+                  '<thead>' +
+
+                    '<tr>' +
+                      '<th>Milicien</th>' +
+                      '<th>Début</th>' +
+                      '<th>Fin</th>' +
+                      '<th>Durée</th>' +
+                      '<th>Prime</th>' +
+                      '<th>Paiement</th>' +
+                      '<th>Actions</th>' +
+                    '</tr>' +
+
+                  '</thead>' +
+
+                  '<tbody>' +
+
+                    data.entries
+                      .map(
+                        (entry) =>
+                          '<tr>' +
+
+                            '<td>' +
+                              entry.memberName +
+                            '</td>' +
+
+                            '<td>' +
+                              formatDate(
+                                entry.start
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+                              (
+                                entry.end
+                                  ? formatDate(
+                                      entry.end
+                                    )
+                                  : "En cours"
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+                              formatDuration(
+                                entry.duration
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+                              (
+                                entry.end
+                                  ? formatMoney(
+                                      entry.bonus
+                                    )
+                                  : "-"
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+                              (
+                                entry.end
+                                  ? (
+                                      entry.paid
+                                        ? "Payé"
+                                        : "En attente"
+                                    )
+                                  : "-"
+                              ) +
+                            '</td>' +
+
+                            '<td>' +
+
+                              '<button class="button red" onclick="deleteEntry(' +
+                                entry.id +
+                              ')">' +
+                                'Supprimer' +
+                              '</button>' +
+
+                            '</td>' +
+
+                          '</tr>'
+                      )
+                      .join("") +
+
+                  '</tbody>' +
+
+                '</table>' +
+
+              '</div>' +
+
+            '</section>';
+        }
+
+        app.innerHTML =
+          '<div class="container">' +
+
+            '<div class="eyebrow">' +
+              'Milice de Cayo Perico' +
+            '</div>' +
+
+            '<h1>' +
+              'Administration' +
+            '</h1>' +
+
+            '<div class="buttons">' +
+
+              '<button class="button secondary" onclick="adminPage(\\'dashboard\\')">' +
+                'Vue générale' +
+              '</button>' +
+
+              '<button class="button secondary" onclick="adminPage(\\'requests\\')">' +
+                'Demandes' +
+              '</button>' +
+
+              '<button class="button secondary" onclick="adminPage(\\'members\\')">' +
+                'Miliciens' +
+              '</button>' +
+
+              '<button class="button secondary" onclick="adminPage(\\'entries\\')">' +
+                'Pointages' +
+              '</button>' +
+
+              '<button class="button red" onclick="adminLogout()">' +
+                'Déconnexion' +
+              '</button>' +
+
+            '</div>' +
+
+            content +
+
+          '</div>';
+      } catch (error) {
         adminLoginPage();
       }
     }
@@ -2529,25 +2739,30 @@ const html = `
       adminPage;
 
     window.approveRequest =
-      async function (id) {
+      async function (
+        id
+      ) {
         const grade =
           prompt(
             "Grade du milicien :",
             "Milicien"
-          ) || "Milicien";
+          ) ||
+          "Milicien";
 
         const division =
           prompt(
             "Division :",
             "Générale"
-          ) || "Générale";
+          ) ||
+          "Générale";
 
         await api(
           "/api/admin/request/" +
-            id +
-            "/approve",
+          id +
+          "/approve",
           {
-            method: "POST",
+            method:
+              "POST",
 
             body:
               JSON.stringify({
@@ -2557,21 +2772,63 @@ const html = `
           }
         );
 
-        adminPage("requests");
+        adminPage(
+          "requests"
+        );
       };
 
     window.rejectRequest =
-      async function (id) {
+      async function (
+        id
+      ) {
         await api(
           "/api/admin/request/" +
-            id +
-            "/reject",
+          id +
+          "/reject",
           {
-            method: "POST"
+            method:
+              "POST"
           }
         );
 
-        adminPage("requests");
+        adminPage(
+          "requests"
+        );
+      };
+
+    window.payWeek =
+      async function (
+        id
+      ) {
+        if (
+          !confirm(
+            "Confirmer le paiement de toute la cagnotte de cette semaine ?"
+          )
+        ) {
+          return;
+        }
+
+        const result =
+          await api(
+            "/api/admin/member/" +
+            id +
+            "/pay-week",
+            {
+              method:
+                "POST"
+            }
+          );
+
+        showMessage(
+          "Paiement enregistré : " +
+          formatMoney(
+            result.totalAmount
+          )
+        );
+
+        adminPage(
+          "members"
+        );
       };
 
     window.toggleMember =
@@ -2581,22 +2838,28 @@ const html = `
       ) {
         await api(
           "/api/admin/member/" +
-            id,
+          id,
           {
-            method: "PUT",
+            method:
+              "PUT",
 
             body:
               JSON.stringify({
-                active: !active
+                active:
+                  !active
               })
           }
         );
 
-        adminPage("members");
+        adminPage(
+          "members"
+        );
       };
 
     window.deleteMember =
-      async function (id) {
+      async function (
+        id
+      ) {
         if (
           !confirm(
             "Supprimer ce membre et tous ses pointages ?"
@@ -2607,30 +2870,22 @@ const html = `
 
         await api(
           "/api/admin/member/" +
-            id,
+          id,
           {
-            method: "DELETE"
+            method:
+              "DELETE"
           }
         );
 
-        adminPage("members");
-      };
-
-    window.togglePayment =
-      async function (id) {
-        await api(
-          "/api/admin/pay/" +
-            id,
-          {
-            method: "POST"
-          }
+        adminPage(
+          "members"
         );
-
-        adminPage("entries");
       };
 
     window.deleteEntry =
-      async function (id) {
+      async function (
+        id
+      ) {
         if (
           !confirm(
             "Supprimer ce pointage ?"
@@ -2641,13 +2896,16 @@ const html = `
 
         await api(
           "/api/admin/entry/" +
-            id,
+          id,
           {
-            method: "DELETE"
+            method:
+              "DELETE"
           }
         );
 
-        adminPage("entries");
+        adminPage(
+          "entries"
+        );
       };
 
     window.adminLogout =
@@ -2655,43 +2913,46 @@ const html = `
         await api(
           "/api/admin/logout",
           {
-            method: "POST"
+            method:
+              "POST"
           }
         );
 
-        home();
+        homePage();
       };
 
     async function startApplication() {
-      const automaticallyConnected =
-        await tryAutomaticLogin();
+      const connected =
+        await automaticLogin();
 
-      if (automaticallyConnected) {
+      if (connected) {
         memberPage();
         return;
       }
 
       try {
-        const adminStatus =
+        const status =
           await api(
             "/api/admin/status"
           );
 
-        if (adminStatus.admin) {
+        if (status.admin) {
           adminPage();
           return;
         }
-      } catch {
+      } catch (error) {
         // Aucun problème.
       }
 
-      home();
+      homePage();
     }
 
     startApplication();
+
   </script>
 
 </body>
+
 </html>
 `;
 
@@ -2699,11 +2960,14 @@ const html = `
    AFFICHAGE DU SITE
 ========================================================= */
 
-app.get("*", (request, response) => {
-  response
-    .type("html")
-    .send(html);
-});
+app.get(
+  "*",
+  (request, response) => {
+    response
+      .type("html")
+      .send(html);
+  }
+);
 
 /* =========================================================
    DÉMARRAGE
@@ -2715,7 +2979,7 @@ app.listen(
   () => {
     console.log(
       "Pointeuse Cayo Perico lancée sur le port " +
-        PORT
+      PORT
     );
   }
 );
