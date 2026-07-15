@@ -1,28 +1,2721 @@
-const express=require('express'),session=require('express-session'),fs=require('fs'),path=require('path'),crypto=require('crypto');
-const app=express(),PORT=process.env.PORT||3000,RATE=12500,ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||'CayoAdmin2026!',DB=path.join(__dirname,'db.json');
-const load=()=>{if(!fs.existsSync(DB))fs.writeFileSync(DB,JSON.stringify({requests:[],members:[],entries:[],payments:[]},null,2));return JSON.parse(fs.readFileSync(DB,'utf8'))};
-const save=db=>fs.writeFileSync(DB,JSON.stringify(db,null,2));const tok=()=>crypto.randomBytes(24).toString('hex');const dur=e=>Math.max(0,(e.end?new Date(e.end):new Date())-new Date(e.start));const bonus=ms=>Math.round(ms/3600000*RATE);const adm=(q,s,n)=>q.session.admin?n():s.status(403).json({error:'Accès administrateur requis'});
-app.use(express.json());app.use(session({secret:process.env.SESSION_SECRET||'change-me',resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',maxAge:43200000}}));
-app.get('/health',(q,s)=>s.json({ok:true}));
-app.post('/api/request',(q,s)=>{const{firstName,lastName,phone='',message=''}=q.body||{};if(!firstName||!lastName)return s.status(400).json({error:'Prénom et nom obligatoires'});const db=load(),fullName=`${firstName} ${lastName}`.trim();if(db.requests.some(r=>r.status==='pending'&&r.fullName.toLowerCase()===fullName.toLowerCase()))return s.status(400).json({error:'Demande déjà en attente'});if(db.members.some(m=>m.active&&m.fullName.toLowerCase()===fullName.toLowerCase()))return s.status(400).json({error:'Accès déjà validé'});db.requests.push({id:Date.now(),fullName,phone,message,status:'pending',createdAt:new Date().toISOString()});save(db);s.json({ok:true})});
-app.post('/api/connect',(q,s)=>{const db=load(),m=db.members.find(x=>x.active&&x.fullName.toLowerCase()===String(q.body?.fullName||'').trim().toLowerCase());if(!m)return s.status(404).json({error:'Aucun accès validé pour ce nom'});if(q.body?.deviceToken&&m.tokens.includes(q.body.deviceToken))return s.json({member:m,deviceToken:q.body.deviceToken});const t=tok();m.tokens.push(t);save(db);s.json({member:m,deviceToken:t})});
-app.post('/api/member/dashboard',(q,s)=>{const db=load(),m=db.members.find(x=>x.active&&x.tokens.includes(q.body?.deviceToken));if(!m)return s.status(401).json({error:'Accès invalide'});const list=db.entries.filter(e=>e.memberId===m.id).sort((a,b)=>new Date(b.start)-new Date(a.start)),done=list.filter(e=>e.end),active=list.find(e=>!e.end)||null,now=new Date(),today=new Date(now.getFullYear(),now.getMonth(),now.getDate()),week=new Date(today),month=new Date(now.getFullYear(),now.getMonth(),1);week.setDate(today.getDate()-((today.getDay()+6)%7));const sum=d=>done.filter(e=>new Date(e.start)>=d).reduce((a,e)=>a+dur(e),0);s.json({member:m,active,stats:{today:sum(today),week:sum(week),month:sum(month),bonus:done.reduce((a,e)=>a+bonus(dur(e)),0)},entries:list.map(e=>({...e,duration:dur(e),bonus:bonus(dur(e)),paid:db.payments.some(p=>p.entryId===e.id)}))})});
-app.post('/api/member/in',(q,s)=>{const db=load(),m=db.members.find(x=>x.active&&x.tokens.includes(q.body?.deviceToken));if(!m)return s.status(401).json({error:'Accès invalide'});if(db.entries.some(e=>e.memberId===m.id&&!e.end))return s.status(400).json({error:'Service déjà en cours'});db.entries.push({id:Date.now(),memberId:m.id,start:new Date().toISOString(),end:null});save(db);s.json({ok:true})});
-app.post('/api/member/out',(q,s)=>{const db=load(),m=db.members.find(x=>x.active&&x.tokens.includes(q.body?.deviceToken));if(!m)return s.status(401).json({error:'Accès invalide'});const e=db.entries.find(x=>x.memberId===m.id&&!x.end);if(!e)return s.status(400).json({error:'Aucun service en cours'});e.end=new Date().toISOString();save(db);s.json({ok:true})});
-app.post('/api/admin/login',(q,s)=>{if(q.body?.password!==ADMIN_PASSWORD)return s.status(401).json({error:'Mot de passe incorrect'});q.session.admin=true;s.json({ok:true})});app.post('/api/admin/logout',(q,s)=>{q.session.admin=false;s.json({ok:true})});app.get('/api/admin/status',(q,s)=>s.json({admin:!!q.session.admin}));
-app.get('/api/admin/data',adm,(q,s)=>{const db=load();s.json({requests:db.requests.filter(r=>r.status==='pending'),members:db.members,entries:db.entries.map(e=>{const m=db.members.find(x=>x.id===e.memberId);return{...e,memberName:m?.fullName||'Membre supprimé',duration:dur(e),bonus:bonus(dur(e)),paid:db.payments.some(p=>p.entryId===e.id)}}).sort((a,b)=>new Date(b.start)-new Date(a.start))})});
-app.post('/api/admin/request/:id/approve',adm,(q,s)=>{const db=load(),r=db.requests.find(x=>x.id===Number(q.params.id)&&x.status==='pending');if(!r)return s.status(404).json({error:'Demande introuvable'});db.members.push({id:Date.now(),fullName:r.fullName,grade:q.body?.grade||'Milicien',division:q.body?.division||'Générale',active:true,tokens:[],createdAt:new Date().toISOString()});r.status='approved';save(db);s.json({ok:true})});app.post('/api/admin/request/:id/reject',adm,(q,s)=>{const db=load(),r=db.requests.find(x=>x.id===Number(q.params.id));if(r)r.status='rejected';save(db);s.json({ok:true})});
-app.put('/api/admin/member/:id',adm,(q,s)=>{const db=load(),m=db.members.find(x=>x.id===Number(q.params.id));if(!m)return s.status(404).json({error:'Membre introuvable'});if(typeof q.body.active==='boolean')m.active=q.body.active;save(db);s.json({ok:true})});app.delete('/api/admin/member/:id',adm,(q,s)=>{const db=load(),id=Number(q.params.id),ids=db.entries.filter(e=>e.memberId===id).map(e=>e.id);db.members=db.members.filter(m=>m.id!==id);db.entries=db.entries.filter(e=>e.memberId!==id);db.payments=db.payments.filter(p=>!ids.includes(p.entryId));save(db);s.json({ok:true})});
-app.post('/api/admin/pay/:id',adm,(q,s)=>{const db=load(),id=Number(q.params.id),x=db.payments.find(p=>p.entryId===id);db.payments=x?db.payments.filter(p=>p.entryId!==id):[...db.payments,{id:Date.now(),entryId:id}];save(db);s.json({ok:true})});app.delete('/api/admin/entry/:id',adm,(q,s)=>{const db=load(),id=Number(q.params.id);db.entries=db.entries.filter(e=>e.id!==id);db.payments=db.payments.filter(p=>p.entryId!==id);save(db);s.json({ok:true})});
-const html=String.raw`<!doctype html>...<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pointeuse Cayo</title><style>:root{--g:#d8b55f;--p:#10251d;--t:#f6f2e8;--m:#9eb0a3;--v:#3ca36f;--r:#d96c65}*{box-sizing:border-box}body{margin:0;background:linear-gradient(#07100de8,#07100df7),url('https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1600&q=80') center/cover fixed;color:var(--t);font-family:Arial,sans-serif}.wrap{width:min(1080px,calc(100% - 24px));margin:auto;padding:28px 0 60px}.hero h1{font-size:clamp(42px,8vw,72px);margin:8px 0;text-transform:uppercase}.gold{color:var(--g)}.muted{color:var(--m)}.box,.card{background:#10251df2;border:1px solid #d8b55f33;border-radius:18px;box-shadow:0 25px 70px #0006}.box{padding:24px;margin-top:16px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{padding:18px}.card strong{display:block;color:#f2d891;font-size:27px;margin-top:8px}.btn{border:0;border-radius:10px;padding:11px 15px;font-weight:800;cursor:pointer;background:var(--g);color:#132018}.btn.green{background:var(--v);color:white}.btn.red{background:var(--r);color:white}.btn.gray{background:#ffffff14;color:white}.row,.tabs{display:flex;gap:10px;flex-wrap:wrap}.field{display:grid;gap:6px;margin-top:12px}.field input,.field textarea{width:100%;padding:12px;border:1px solid #ffffff1a;border-radius:10px;background:#081510;color:white}.field textarea{min-height:80px}.login{min-height:100vh;display:grid;place-items:center;padding:20px}.login .box{width:min(620px,100%)}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:12px;border-bottom:1px solid #ffffff12;text-align:left}.scroll{overflow:auto}.hidden{display:none}.clock{font-size:40px;color:#f2d891;font-weight:900}.request{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px;border:1px solid #ffffff14;border-radius:12px;margin-top:10px}@media(max-width:800px){.grid{grid-template-columns:1fr 1fr}.request{align-items:flex-start;flex-direction:column}}</style></head><body><main id="app"></main><script>
-const app=document.querySelector('#app');let timer;const money=n=>new Intl.NumberFormat('fr-FR').format(Math.round(n))+' $',fd=ms=>{let m=Math.floor(ms/60000);return Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')},dt=s=>new Date(s).toLocaleString('fr-FR');async function api(u,o={}){let r=await fetch(u,{headers:{'Content-Type':'application/json'},...o}),j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||'Erreur');return j}const tell=x=>alert(x);
-function home(){app.innerHTML='<div class="login"><div class="box"><div class="gold">MILICE DE CAYO PERICO</div><h1>Pointeuse officielle</h1><p class="muted">Connectez-vous avec votre nom RP ou envoyez une demande d’accès.</p><div class="tabs"><button class="btn green" onclick="show(1)">Entrer</button><button class="btn gray" onclick="show(2)">Demande d’accès</button></div><div id="c" class="box"><div class="field"><label>Nom RP complet</label><input id="memberName"></div><button class="btn" style="margin-top:12px;width:100%" onclick="connect()">Se connecter</button></div><div id="r" class="box hidden"><div class="row"><div class="field" style="flex:1"><label>Prénom RP</label><input id="first"></div><div class="field" style="flex:1"><label>Nom RP</label><input id="last"></div></div><div class="field"><label>Téléphone RP</label><input id="phone"></div><div class="field"><label>Message</label><textarea id="message"></textarea></div><button class="btn" style="margin-top:12px;width:100%" onclick="requestAccess()">Envoyer</button></div><button class="btn gray" style="margin-top:16px" onclick="adminLogin()">Accès administrateur</button></div></div>'}
-window.show=n=>{c.classList.toggle('hidden',n!==1);r.classList.toggle('hidden',n!==2)};window.requestAccess=async()=>{try{await api('/api/request',{method:'POST',body:JSON.stringify({firstName:first.value,lastName:last.value,phone:phone.value,message:message.value})});tell('Demande envoyée au Général.')}catch(e){tell(e.message)}};window.connect=async()=>{try{let old=localStorage.getItem('cayoToken')||'',x=await api('/api/connect',{method:'POST',body:JSON.stringify({fullName:document.getElementById('memberName').value.trim(),deviceToken:old})});localStorage.setItem('cayoToken',x.deviceToken);member()}catch(e){tell(e.message)}};
-async function member(){let t=localStorage.getItem('cayoToken');if(!t)return home();try{let x=await api('/api/member/dashboard',{method:'POST',body:JSON.stringify({deviceToken:t})}),a=x.active,rows=x.entries.filter(e=>e.end).map(e=>'<tr><td>'+dt(e.start)+'</td><td>'+dt(e.end)+'</td><td>'+fd(e.duration)+'</td><td>'+money(e.bonus)+'</td><td>'+(e.paid?'Payé':'En attente')+'</td></tr>').join('');app.innerHTML='<div class="wrap"><div class="hero"><div class="gold">POINTEUSE OFFICIELLE</div><h1>'+x.member.fullName+'</h1><p class="muted">'+x.member.grade+' · '+x.member.division+'</p></div><div class="grid"><div class="card">Aujourd’hui<strong>'+fd(x.stats.today)+'</strong></div><div class="card">Cette semaine<strong>'+fd(x.stats.week)+'</strong></div><div class="card">Ce mois<strong>'+fd(x.stats.month)+'</strong></div><div class="card">Prime totale<strong>'+money(x.stats.bonus)+'</strong></div></div><div class="box"><h2>'+(a?'Service en cours':'Hors service')+'</h2><div id="clock" class="clock">'+(a?fd(Date.now()-new Date(a.start)):'0 h 00')+'</div><p class="muted">Prime fixe : 12 500 $ / heure</p><button class="btn '+(a?'red':'green')+'" onclick="toggleService('+(a?'true':'false')+')">'+(a?'Terminer le service':'Commencer le service')+'</button> <button class="btn gray" onclick="logoutMember()">Déconnexion</button></div><div class="box"><h2>Historique</h2><div class="scroll"><table><thead><tr><th>Arrivée</th><th>Départ</th><th>Durée</th><th>Prime</th><th>Paiement</th></tr></thead><tbody>'+rows+'</tbody></table></div></div></div>';clearInterval(timer);if(a)timer=setInterval(()=>{let z=document.querySelector('#clock');if(z)z.textContent=fd(Date.now()-new Date(a.start))},1000)}catch(e){localStorage.removeItem('cayoToken');home()}}
-window.toggleService=async a=>{try{await api(a?'/api/member/out':'/api/member/in',{method:'POST',body:JSON.stringify({deviceToken:localStorage.getItem('cayoToken')})});member()}catch(e){tell(e.message)}};window.logoutMember=()=>{localStorage.removeItem('cayoToken');home()};
-function adminLogin(){app.innerHTML='<div class="login"><div class="box"><h1>Administration</h1><div class="field"><label>Mot de passe</label><input id="ap" type="password"></div><button class="btn" style="margin-top:12px" onclick="doAdminLogin()">Connexion</button> <button class="btn gray" onclick="home()">Retour</button></div></div>'}window.doAdminLogin=async()=>{try{await api('/api/admin/login',{method:'POST',body:JSON.stringify({password:ap.value})});adminView()}catch(e){tell(e.message)}};
-async function adminView(tab='dashboard'){try{let x=await api('/api/admin/data'),active=x.entries.filter(e=>!e.end),unpaid=x.entries.filter(e=>e.end&&!e.paid).reduce((s,e)=>s+e.bonus,0),content='';if(tab==='dashboard')content='<div class="grid"><div class="card">Miliciens<strong>'+x.members.filter(m=>m.active).length+'</strong></div><div class="card">En service<strong>'+active.length+'</strong></div><div class="card">Demandes<strong>'+x.requests.length+'</strong></div><div class="card">À payer<strong>'+money(unpaid)+'</strong></div></div><div class="box"><h2>En service</h2>'+active.map(e=>'<div class="request"><b>'+e.memberName+'</b><span>'+fd(e.duration)+'</span></div>').join('')+'</div>';if(tab==='requests')content='<div class="box"><h2>Demandes en attente</h2>'+x.requests.map(r=>'<div class="request"><div><b>'+r.fullName+'</b><div class="muted">'+dt(r.createdAt)+'</div></div><div class="row"><button class="btn green" onclick="approve('+r.id+')">Accepter</button><button class="btn red" onclick="rejectReq('+r.id+')">Refuser</button></div></div>').join('')+'</div>';if(tab==='members')content='<div class="box"><div class="scroll"><table><thead><tr><th>Nom</th><th>Grade</th><th>Division</th><th>Statut</th><th>Actions</th></tr></thead><tbody>'+x.members.map(m=>'<tr><td>'+m.fullName+'</td><td>'+m.grade+'</td><td>'+m.division+'</td><td>'+(m.active?'Actif':'Désactivé')+'</td><td><button class="btn gray" onclick="toggleMember('+m.id+','+m.active+')">'+(m.active?'Désactiver':'Réactiver')+'</button> <button class="btn red" onclick="deleteMember('+m.id+')">Supprimer</button></td></tr>').join('')+'</tbody></table></div></div>';if(tab==='entries')content='<div class="box"><div class="scroll"><table><thead><tr><th>Nom</th><th>Début</th><th>Fin</th><th>Durée</th><th>Prime</th><th>Paiement</th><th>Actions</th></tr></thead><tbody>'+x.entries.map(e=>'<tr><td>'+e.memberName+'</td><td>'+dt(e.start)+'</td><td>'+(e.end?dt(e.end):'En cours')+'</td><td>'+fd(e.duration)+'</td><td>'+(e.end?money(e.bonus):'-')+'</td><td>'+(e.end?'<button class="btn '+(e.paid?'green':'gray')+'" onclick="pay('+e.id+')">'+(e.paid?'Payé':'Marquer payé')+'</button>':'-')+'</td><td><button class="btn red" onclick="deleteEntry('+e.id+')">Supprimer</button></td></tr>').join('')+'</tbody></table></div></div>';app.innerHTML='<div class="wrap"><div class="hero"><div class="gold">MILICE DE CAYO PERICO</div><h1>Administration</h1></div><div class="tabs"><button class="btn gray" onclick="adminView(\'dashboard\')">Vue générale</button><button class="btn gray" onclick="adminView(\'requests\')">Demandes</button><button class="btn gray" onclick="adminView(\'members\')">Miliciens</button><button class="btn gray" onclick="adminView(\'entries\')">Pointages</button><button class="btn red" onclick="adminLogout()">Déconnexion</button></div>'+content+'</div>'}catch(e){adminLogin()}}
-window.adminView=adminView;window.approve=async id=>{let grade=prompt('Grade','Milicien')||'Milicien',division=prompt('Division','Générale')||'Générale';await api('/api/admin/request/'+id+'/approve',{method:'POST',body:JSON.stringify({grade,division})});adminView('requests')};window.rejectReq=async id=>{await api('/api/admin/request/'+id+'/reject',{method:'POST'});adminView('requests')};window.toggleMember=async(id,a)=>{await api('/api/admin/member/'+id,{method:'PUT',body:JSON.stringify({active:!a})});adminView('members')};window.deleteMember=async id=>{if(confirm('Supprimer ce membre et ses pointages ?')){await api('/api/admin/member/'+id,{method:'DELETE'});adminView('members')}};window.pay=async id=>{await api('/api/admin/pay/'+id,{method:'POST'});adminView('entries')};window.deleteEntry=async id=>{if(confirm('Supprimer ce pointage ?')){await api('/api/admin/entry/'+id,{method:'DELETE'});adminView('entries')}};window.adminLogout=async()=>{await api('/api/admin/logout',{method:'POST'});home()};
-(async()=>{if(localStorage.getItem('cayoToken'))return member();let s=await api('/api/admin/status');s.admin?adminView():home()})();
-</script></body></html>`;
-app.get('*',(q,s)=>s.type('html').send(html));app.listen(PORT,'0.0.0.0',()=>console.log('Pointeuse Cayo sur port '+PORT));
+const express = require("express");
+const session = require("express-session");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+const RATE = 12500;
+
+const ADMIN_PASSWORD =
+  process.env.ADMIN_PASSWORD || "CayoAdmin2026!";
+
+const SESSION_SECRET =
+  process.env.SESSION_SECRET || "change-this-secret-cayo";
+
+const DATABASE_PATH = path.join(__dirname, "db.json");
+
+/* =========================================================
+   BASE DE DONNÉES
+========================================================= */
+
+function createDefaultDatabase() {
+  return {
+    requests: [],
+    members: [],
+    entries: [],
+    payments: []
+  };
+}
+
+function loadDatabase() {
+  if (!fs.existsSync(DATABASE_PATH)) {
+    fs.writeFileSync(
+      DATABASE_PATH,
+      JSON.stringify(createDefaultDatabase(), null, 2),
+      "utf8"
+    );
+  }
+
+  try {
+    return JSON.parse(
+      fs.readFileSync(DATABASE_PATH, "utf8")
+    );
+  } catch (error) {
+    console.error("Erreur de lecture de la base :", error);
+
+    const database = createDefaultDatabase();
+
+    fs.writeFileSync(
+      DATABASE_PATH,
+      JSON.stringify(database, null, 2),
+      "utf8"
+    );
+
+    return database;
+  }
+}
+
+function saveDatabase(database) {
+  fs.writeFileSync(
+    DATABASE_PATH,
+    JSON.stringify(database, null, 2),
+    "utf8"
+  );
+}
+
+/* =========================================================
+   OUTILS
+========================================================= */
+
+function createDeviceToken() {
+  return crypto
+    .randomBytes(32)
+    .toString("hex");
+}
+
+function normalizeName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function getEntryDuration(entry) {
+  const start = new Date(entry.start).getTime();
+
+  const end = entry.end
+    ? new Date(entry.end).getTime()
+    : Date.now();
+
+  return Math.max(0, end - start);
+}
+
+function calculateBonus(durationMs) {
+  return Math.round(
+    (durationMs / 3600000) * RATE
+  );
+}
+
+function findMemberByToken(database, token) {
+  return database.members.find(
+    (member) =>
+      member.active &&
+      Array.isArray(member.tokens) &&
+      member.tokens.includes(token)
+  );
+}
+
+function requireAdmin(request, response, next) {
+  if (!request.session.admin) {
+    return response.status(403).json({
+      error: "Accès administrateur requis."
+    });
+  }
+
+  next();
+}
+
+/* =========================================================
+   CONFIGURATION EXPRESS
+========================================================= */
+
+app.use(express.json());
+
+app.use(
+  session({
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 1000 * 60 * 60 * 12
+    }
+  })
+);
+
+/* =========================================================
+   ROUTES PUBLIQUES
+========================================================= */
+
+app.get("/health", (request, response) => {
+  response.json({
+    ok: true,
+    version: "finale"
+  });
+});
+
+/* =========================================================
+   DEMANDE D’ACCÈS
+========================================================= */
+
+app.post("/api/request", (request, response) => {
+  const {
+    firstName,
+    lastName,
+    phone = "",
+    message = "",
+    deviceToken = ""
+  } = request.body || {};
+
+  if (!firstName || !lastName) {
+    return response.status(400).json({
+      error: "Le prénom et le nom RP sont obligatoires."
+    });
+  }
+
+  const database = loadDatabase();
+
+  const fullName = `${firstName} ${lastName}`
+    .trim()
+    .replace(/\s+/g, " ");
+
+  const normalizedFullName =
+    normalizeName(fullName);
+
+  const pendingRequest =
+    database.requests.find(
+      (item) =>
+        item.status === "pending" &&
+        normalizeName(item.fullName) ===
+          normalizedFullName
+    );
+
+  if (pendingRequest) {
+    return response.status(400).json({
+      error:
+        "Une demande est déjà en attente pour ce nom."
+    });
+  }
+
+  const existingMember =
+    database.members.find(
+      (member) =>
+        member.active &&
+        normalizeName(member.fullName) ===
+          normalizedFullName
+    );
+
+  if (existingMember) {
+    return response.status(400).json({
+      error:
+        "Ce membre possède déjà un accès validé."
+    });
+  }
+
+  const requestItem = {
+    id: Date.now(),
+    fullName,
+    firstName: String(firstName).trim(),
+    lastName: String(lastName).trim(),
+    phone: String(phone).trim(),
+    message: String(message).trim(),
+    deviceToken: String(deviceToken).trim(),
+    status: "pending",
+    createdAt: new Date().toISOString()
+  };
+
+  database.requests.push(requestItem);
+
+  saveDatabase(database);
+
+  response.json({
+    ok: true,
+    message:
+      "Votre demande a été envoyée au Général."
+  });
+});
+
+/* =========================================================
+   CONNEXION AUTOMATIQUE PAR APPAREIL
+========================================================= */
+
+app.post(
+  "/api/member/automatic-connect",
+  (request, response) => {
+    const { deviceToken } =
+      request.body || {};
+
+    if (!deviceToken) {
+      return response.status(401).json({
+        error: "Aucun appareil reconnu."
+      });
+    }
+
+    const database = loadDatabase();
+
+    const member = findMemberByToken(
+      database,
+      deviceToken
+    );
+
+    if (!member) {
+      return response.status(401).json({
+        error:
+          "Cet appareil n'est pas encore autorisé."
+      });
+    }
+
+    response.json({
+      member: {
+        id: member.id,
+        fullName: member.fullName,
+        grade: member.grade,
+        division: member.division
+      }
+    });
+  }
+);
+
+/* =========================================================
+   CONNEXION MANUELLE PAR NOM
+========================================================= */
+
+app.post("/api/connect", (request, response) => {
+  const {
+    fullName,
+    deviceToken = ""
+  } = request.body || {};
+
+  if (!fullName) {
+    return response.status(400).json({
+      error: "Indiquez votre nom RP complet."
+    });
+  }
+
+  const database = loadDatabase();
+
+  const normalizedFullName =
+    normalizeName(fullName);
+
+  const member = database.members.find(
+    (item) =>
+      item.active &&
+      normalizeName(item.fullName) ===
+        normalizedFullName
+  );
+
+  if (!member) {
+    return response.status(404).json({
+      error:
+        "Aucun accès validé pour ce nom."
+    });
+  }
+
+  if (!Array.isArray(member.tokens)) {
+    member.tokens = [];
+  }
+
+  let finalToken = deviceToken;
+
+  if (
+    !finalToken ||
+    !member.tokens.includes(finalToken)
+  ) {
+    finalToken = createDeviceToken();
+    member.tokens.push(finalToken);
+  }
+
+  member.lastConnectionAt =
+    new Date().toISOString();
+
+  saveDatabase(database);
+
+  response.json({
+    member: {
+      id: member.id,
+      fullName: member.fullName,
+      grade: member.grade,
+      division: member.division
+    },
+    deviceToken: finalToken
+  });
+});
+
+/* =========================================================
+   TABLEAU DE BORD MILICIEN
+========================================================= */
+
+app.post(
+  "/api/member/dashboard",
+  (request, response) => {
+    const { deviceToken } =
+      request.body || {};
+
+    const database = loadDatabase();
+
+    const member = findMemberByToken(
+      database,
+      deviceToken
+    );
+
+    if (!member) {
+      return response.status(401).json({
+        error:
+          "Accès invalide ou désactivé."
+      });
+    }
+
+    const entries = database.entries
+      .filter(
+        (entry) =>
+          entry.memberId === member.id
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.start) -
+          new Date(a.start)
+      );
+
+    const activeEntry =
+      entries.find((entry) => !entry.end) ||
+      null;
+
+    const completedEntries =
+      entries.filter((entry) => entry.end);
+
+    const now = new Date();
+
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+
+    const startOfWeek =
+      new Date(startOfToday);
+
+    startOfWeek.setDate(
+      startOfToday.getDate() -
+        ((startOfToday.getDay() + 6) % 7)
+    );
+
+    const startOfMonth = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1
+    );
+
+    function sumSince(date) {
+      return completedEntries
+        .filter(
+          (entry) =>
+            new Date(entry.start) >= date
+        )
+        .reduce(
+          (total, entry) =>
+            total +
+            getEntryDuration(entry),
+          0
+        );
+    }
+
+    response.json({
+      member: {
+        id: member.id,
+        fullName: member.fullName,
+        grade: member.grade,
+        division: member.division
+      },
+
+      active: activeEntry,
+
+      rate: RATE,
+
+      stats: {
+        today: sumSince(startOfToday),
+        week: sumSince(startOfWeek),
+        month: sumSince(startOfMonth),
+
+        totalBonus:
+          completedEntries.reduce(
+            (total, entry) =>
+              total +
+              calculateBonus(
+                getEntryDuration(entry)
+              ),
+            0
+          )
+      },
+
+      entries: entries.map((entry) => {
+        const duration =
+          getEntryDuration(entry);
+
+        return {
+          ...entry,
+          duration,
+          bonus:
+            calculateBonus(duration),
+          paid:
+            database.payments.some(
+              (payment) =>
+                payment.entryId ===
+                entry.id
+            )
+        };
+      })
+    });
+  }
+);
+
+/* =========================================================
+   DÉBUT DE SERVICE
+========================================================= */
+
+app.post(
+  "/api/member/in",
+  (request, response) => {
+    const { deviceToken } =
+      request.body || {};
+
+    const database = loadDatabase();
+
+    const member = findMemberByToken(
+      database,
+      deviceToken
+    );
+
+    if (!member) {
+      return response.status(401).json({
+        error: "Accès invalide."
+      });
+    }
+
+    const activeEntry =
+      database.entries.find(
+        (entry) =>
+          entry.memberId === member.id &&
+          !entry.end
+      );
+
+    if (activeEntry) {
+      return response.status(400).json({
+        error:
+          "Un service est déjà en cours."
+      });
+    }
+
+    database.entries.push({
+      id: Date.now(),
+      memberId: member.id,
+      start: new Date().toISOString(),
+      end: null
+    });
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   FIN DE SERVICE
+========================================================= */
+
+app.post(
+  "/api/member/out",
+  (request, response) => {
+    const { deviceToken } =
+      request.body || {};
+
+    const database = loadDatabase();
+
+    const member = findMemberByToken(
+      database,
+      deviceToken
+    );
+
+    if (!member) {
+      return response.status(401).json({
+        error: "Accès invalide."
+      });
+    }
+
+    const activeEntry =
+      database.entries.find(
+        (entry) =>
+          entry.memberId === member.id &&
+          !entry.end
+      );
+
+    if (!activeEntry) {
+      return response.status(400).json({
+        error:
+          "Aucun service n'est actuellement en cours."
+      });
+    }
+
+    activeEntry.end =
+      new Date().toISOString();
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true,
+      duration:
+        getEntryDuration(activeEntry),
+      bonus:
+        calculateBonus(
+          getEntryDuration(activeEntry)
+        )
+    });
+  }
+);
+
+/* =========================================================
+   CONNEXION ADMIN
+========================================================= */
+
+app.post(
+  "/api/admin/login",
+  (request, response) => {
+    const { password } =
+      request.body || {};
+
+    if (password !== ADMIN_PASSWORD) {
+      return response.status(401).json({
+        error:
+          "Mot de passe administrateur incorrect."
+      });
+    }
+
+    request.session.admin = true;
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+app.post(
+  "/api/admin/logout",
+  (request, response) => {
+    request.session.admin = false;
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+app.get(
+  "/api/admin/status",
+  (request, response) => {
+    response.json({
+      admin:
+        Boolean(request.session.admin)
+    });
+  }
+);
+
+/* =========================================================
+   DONNÉES ADMIN
+========================================================= */
+
+app.get(
+  "/api/admin/data",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const entries =
+      database.entries
+        .map((entry) => {
+          const member =
+            database.members.find(
+              (item) =>
+                item.id ===
+                entry.memberId
+            );
+
+          const duration =
+            getEntryDuration(entry);
+
+          return {
+            ...entry,
+
+            memberName:
+              member?.fullName ||
+              "Membre supprimé",
+
+            grade:
+              member?.grade || "",
+
+            duration,
+
+            bonus:
+              calculateBonus(duration),
+
+            paid:
+              database.payments.some(
+                (payment) =>
+                  payment.entryId ===
+                  entry.id
+              )
+          };
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.start) -
+            new Date(a.start)
+        );
+
+    response.json({
+      requests:
+        database.requests
+          .filter(
+            (item) =>
+              item.status === "pending"
+          )
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt) -
+              new Date(a.createdAt)
+          ),
+
+      members:
+        database.members,
+
+      entries
+    });
+  }
+);
+
+/* =========================================================
+   ACCEPTER UNE DEMANDE
+========================================================= */
+
+app.post(
+  "/api/admin/request/:id/approve",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const accessRequest =
+      database.requests.find(
+        (item) =>
+          item.id ===
+            Number(request.params.id) &&
+          item.status === "pending"
+      );
+
+    if (!accessRequest) {
+      return response.status(404).json({
+        error: "Demande introuvable."
+      });
+    }
+
+    const tokens = [];
+
+    if (accessRequest.deviceToken) {
+      tokens.push(
+        accessRequest.deviceToken
+      );
+    }
+
+    const member = {
+      id: Date.now(),
+
+      fullName:
+        accessRequest.fullName,
+
+      grade:
+        request.body?.grade ||
+        "Milicien",
+
+      division:
+        request.body?.division ||
+        "Générale",
+
+      active: true,
+
+      tokens,
+
+      createdAt:
+        new Date().toISOString()
+    };
+
+    database.members.push(member);
+
+    accessRequest.status =
+      "approved";
+
+    accessRequest.reviewedAt =
+      new Date().toISOString();
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true,
+      member
+    });
+  }
+);
+
+/* =========================================================
+   REFUSER UNE DEMANDE
+========================================================= */
+
+app.post(
+  "/api/admin/request/:id/reject",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const accessRequest =
+      database.requests.find(
+        (item) =>
+          item.id ===
+          Number(request.params.id)
+      );
+
+    if (!accessRequest) {
+      return response.status(404).json({
+        error: "Demande introuvable."
+      });
+    }
+
+    accessRequest.status =
+      "rejected";
+
+    accessRequest.reviewedAt =
+      new Date().toISOString();
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   ACTIVER / DÉSACTIVER UN MEMBRE
+========================================================= */
+
+app.put(
+  "/api/admin/member/:id",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const member =
+      database.members.find(
+        (item) =>
+          item.id ===
+          Number(request.params.id)
+      );
+
+    if (!member) {
+      return response.status(404).json({
+        error: "Membre introuvable."
+      });
+    }
+
+    if (
+      typeof request.body.active ===
+      "boolean"
+    ) {
+      member.active =
+        request.body.active;
+    }
+
+    if (request.body.grade) {
+      member.grade =
+        String(
+          request.body.grade
+        ).trim();
+    }
+
+    if (request.body.division) {
+      member.division =
+        String(
+          request.body.division
+        ).trim();
+    }
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   SUPPRIMER UN MEMBRE
+========================================================= */
+
+app.delete(
+  "/api/admin/member/:id",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const memberId =
+      Number(request.params.id);
+
+    const entryIds =
+      database.entries
+        .filter(
+          (entry) =>
+            entry.memberId ===
+            memberId
+        )
+        .map((entry) => entry.id);
+
+    database.members =
+      database.members.filter(
+        (member) =>
+          member.id !== memberId
+      );
+
+    database.entries =
+      database.entries.filter(
+        (entry) =>
+          entry.memberId !==
+          memberId
+      );
+
+    database.payments =
+      database.payments.filter(
+        (payment) =>
+          !entryIds.includes(
+            payment.entryId
+          )
+      );
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   PAYER / ANNULER LE PAIEMENT
+========================================================= */
+
+app.post(
+  "/api/admin/pay/:id",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const entryId =
+      Number(request.params.id);
+
+    const entry =
+      database.entries.find(
+        (item) =>
+          item.id === entryId &&
+          item.end
+      );
+
+    if (!entry) {
+      return response.status(404).json({
+        error:
+          "Pointage introuvable ou toujours en cours."
+      });
+    }
+
+    const existingPayment =
+      database.payments.find(
+        (payment) =>
+          payment.entryId ===
+          entryId
+      );
+
+    if (existingPayment) {
+      database.payments =
+        database.payments.filter(
+          (payment) =>
+            payment.entryId !==
+            entryId
+        );
+    } else {
+      database.payments.push({
+        id: Date.now(),
+        entryId,
+        amount:
+          calculateBonus(
+            getEntryDuration(entry)
+          ),
+        paidAt:
+          new Date().toISOString()
+      });
+    }
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true,
+      paid: !existingPayment
+    });
+  }
+);
+
+/* =========================================================
+   SUPPRIMER UN POINTAGE
+========================================================= */
+
+app.delete(
+  "/api/admin/entry/:id",
+  requireAdmin,
+  (request, response) => {
+    const database = loadDatabase();
+
+    const entryId =
+      Number(request.params.id);
+
+    database.entries =
+      database.entries.filter(
+        (entry) =>
+          entry.id !== entryId
+      );
+
+    database.payments =
+      database.payments.filter(
+        (payment) =>
+          payment.entryId !==
+          entryId
+      );
+
+    saveDatabase(database);
+
+    response.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================================================
+   INTERFACE HTML
+========================================================= */
+
+const html = String.raw`
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>Pointeuse Cayo Perico</title>
+
+  <style>
+    :root {
+      --gold: #d8b55f;
+      --gold-light: #f2d891;
+      --panel: rgba(10, 31, 24, 0.94);
+      --text: #f6f2e8;
+      --muted: #9eb0a3;
+      --green: #3ca36f;
+      --red: #d96c65;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+
+      color: var(--text);
+
+      font-family:
+        Arial,
+        sans-serif;
+
+      background:
+        linear-gradient(
+          rgba(4, 14, 10, 0.82),
+          rgba(4, 14, 10, 0.94)
+        ),
+        url(
+          "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1800&q=80"
+        );
+
+      background-position: center;
+      background-size: cover;
+      background-attachment: fixed;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    .container {
+      width: min(
+        1100px,
+        calc(100% - 28px)
+      );
+
+      margin: auto;
+      padding: 30px 0 70px;
+    }
+
+    .center-page {
+      min-height: 100vh;
+
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      padding: 20px;
+    }
+
+    .panel,
+    .card {
+      border:
+        1px solid
+        rgba(216, 181, 95, 0.25);
+
+      border-radius: 18px;
+
+      background: var(--panel);
+
+      box-shadow:
+        0 25px 80px
+        rgba(0, 0, 0, 0.4);
+    }
+
+    .panel {
+      padding: 25px;
+      margin-top: 16px;
+    }
+
+    .login-panel {
+      width: min(
+        600px,
+        100%
+      );
+
+      padding: 32px;
+    }
+
+    .eyebrow {
+      color: var(--gold);
+
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 2px;
+
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 12px;
+
+      color: var(--gold-light);
+
+      font-size: clamp(
+        38px,
+        7vw,
+        68px
+      );
+
+      line-height: 1;
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+
+      margin-top: 18px;
+    }
+
+    .button {
+      border: none;
+      border-radius: 10px;
+
+      padding: 12px 16px;
+
+      cursor: pointer;
+
+      color: #142017;
+      background: var(--gold);
+
+      font-weight: 800;
+    }
+
+    .button.green {
+      color: white;
+      background: var(--green);
+    }
+
+    .button.red {
+      color: white;
+      background: var(--red);
+    }
+
+    .button.secondary {
+      color: white;
+
+      background:
+        rgba(255, 255, 255, 0.08);
+
+      border:
+        1px solid
+        rgba(255, 255, 255, 0.12);
+    }
+
+    .button.full {
+      width: 100%;
+      margin-top: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+
+      margin-top: 13px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .field input,
+    .field textarea,
+    .field select {
+      width: 100%;
+
+      padding: 12px;
+
+      color: white;
+      background: #081510;
+
+      border:
+        1px solid
+        rgba(255, 255, 255, 0.15);
+
+      border-radius: 10px;
+
+      outline: none;
+    }
+
+    .field textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .statistics {
+      display: grid;
+      grid-template-columns:
+        repeat(4, 1fr);
+
+      gap: 12px;
+
+      margin-top: 20px;
+    }
+
+    .card {
+      padding: 20px;
+    }
+
+    .card small {
+      color: var(--muted);
+
+      font-size: 11px;
+      font-weight: 800;
+
+      text-transform: uppercase;
+    }
+
+    .card strong {
+      display: block;
+
+      margin-top: 9px;
+
+      color: var(--gold-light);
+
+      font-size: 28px;
+    }
+
+    .clock {
+      color: var(--gold-light);
+
+      font-size: 42px;
+      font-weight: 900;
+
+      margin: 10px 0;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 12px;
+
+      text-align: left;
+
+      border-bottom:
+        1px solid
+        rgba(255, 255, 255, 0.08);
+    }
+
+    th {
+      color: var(--muted);
+
+      font-size: 11px;
+
+      text-transform: uppercase;
+    }
+
+    .request-card {
+      display: flex;
+      justify-content: space-between;
+      gap: 15px;
+
+      margin-top: 10px;
+      padding: 15px;
+
+      border:
+        1px solid
+        rgba(255, 255, 255, 0.1);
+
+      border-radius: 12px;
+    }
+
+    @media (max-width: 800px) {
+      .statistics {
+        grid-template-columns:
+          repeat(2, 1fr);
+      }
+
+      .request-card {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <main id="app"></main>
+
+  <script>
+    const app =
+      document.getElementById("app");
+
+    let timer = null;
+
+    function formatMoney(value) {
+      return new Intl.NumberFormat(
+        "fr-FR"
+      ).format(
+        Math.round(value)
+      ) + " $";
+    }
+
+    function formatDuration(ms) {
+      const totalMinutes =
+        Math.floor(ms / 60000);
+
+      const hours =
+        Math.floor(
+          totalMinutes / 60
+        );
+
+      const minutes =
+        totalMinutes % 60;
+
+      return (
+        hours +
+        " h " +
+        String(minutes).padStart(
+          2,
+          "0"
+        )
+      );
+    }
+
+    function formatDate(value) {
+      return new Date(
+        value
+      ).toLocaleString(
+        "fr-FR"
+      );
+    }
+
+    async function api(
+      url,
+      options = {}
+    ) {
+      const response =
+        await fetch(url, {
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          ...options
+        });
+
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+          "Une erreur est survenue."
+        );
+      }
+
+      return data;
+    }
+
+    function alertMessage(message) {
+      alert(message);
+    }
+
+    function createLocalDeviceToken() {
+      let token =
+        localStorage.getItem(
+          "cayoPendingDeviceToken"
+        );
+
+      if (!token) {
+        token =
+          "device-" +
+          Date.now() +
+          "-" +
+          Math.random()
+            .toString(36)
+            .slice(2);
+
+        localStorage.setItem(
+          "cayoPendingDeviceToken",
+          token
+        );
+      }
+
+      return token;
+    }
+
+    function home() {
+      app.innerHTML = \`
+        <div class="center-page">
+          <section class="panel login-panel">
+
+            <div class="eyebrow">
+              Milice de Cayo Perico
+            </div>
+
+            <h1>
+              Pointeuse officielle
+            </h1>
+
+            <p class="muted">
+              Accédez à votre espace ou envoyez une demande d'accès.
+            </p>
+
+            <div class="buttons">
+
+              <button
+                class="button green"
+                onclick="showHomeSection('connect')"
+              >
+                Entrer
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="showHomeSection('request')"
+              >
+                Demande d'accès
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="adminLoginPage()"
+              >
+                Administration
+              </button>
+
+            </div>
+
+            <div
+              id="connectSection"
+              class="panel"
+            >
+              <div class="field">
+
+                <label>
+                  Nom RP complet
+                </label>
+
+                <input
+                  id="memberName"
+                  placeholder="Exemple : Juan Pedro"
+                >
+
+              </div>
+
+              <button
+                class="button full"
+                onclick="manualConnect()"
+              >
+                Se connecter
+              </button>
+            </div>
+
+            <div
+              id="requestSection"
+              class="panel hidden"
+            >
+
+              <div class="field">
+
+                <label>
+                  Prénom RP
+                </label>
+
+                <input id="firstName">
+
+              </div>
+
+              <div class="field">
+
+                <label>
+                  Nom RP
+                </label>
+
+                <input id="lastName">
+
+              </div>
+
+              <div class="field">
+
+                <label>
+                  Téléphone RP
+                </label>
+
+                <input id="phone">
+
+              </div>
+
+              <div class="field">
+
+                <label>
+                  Message
+                </label>
+
+                <textarea id="message"></textarea>
+
+              </div>
+
+              <button
+                class="button full"
+                onclick="sendAccessRequest()"
+              >
+                Envoyer la demande
+              </button>
+
+            </div>
+
+          </section>
+        </div>
+      \`;
+    }
+
+    window.showHomeSection =
+      function (section) {
+        document
+          .getElementById(
+            "connectSection"
+          )
+          .classList.toggle(
+            "hidden",
+            section !== "connect"
+          );
+
+        document
+          .getElementById(
+            "requestSection"
+          )
+          .classList.toggle(
+            "hidden",
+            section !== "request"
+          );
+      };
+
+    window.sendAccessRequest =
+      async function () {
+        try {
+          const deviceToken =
+            createLocalDeviceToken();
+
+          await api(
+            "/api/request",
+            {
+              method: "POST",
+
+              body: JSON.stringify({
+                firstName:
+                  document.getElementById(
+                    "firstName"
+                  ).value,
+
+                lastName:
+                  document.getElementById(
+                    "lastName"
+                  ).value,
+
+                phone:
+                  document.getElementById(
+                    "phone"
+                  ).value,
+
+                message:
+                  document.getElementById(
+                    "message"
+                  ).value,
+
+                deviceToken
+              })
+            }
+          );
+
+          alertMessage(
+            "Demande envoyée. Une fois acceptée, recharge simplement le site."
+          );
+        } catch (error) {
+          alertMessage(
+            error.message
+          );
+        }
+      };
+
+    window.manualConnect =
+      async function () {
+        try {
+          const oldToken =
+            localStorage.getItem(
+              "cayoToken"
+            ) || "";
+
+          const response =
+            await api(
+              "/api/connect",
+              {
+                method: "POST",
+
+                body:
+                  JSON.stringify({
+                    fullName:
+                      document
+                        .getElementById(
+                          "memberName"
+                        )
+                        .value
+                        .trim(),
+
+                    deviceToken:
+                      oldToken
+                  })
+              }
+            );
+
+          localStorage.setItem(
+            "cayoToken",
+            response.deviceToken
+          );
+
+          localStorage.removeItem(
+            "cayoPendingDeviceToken"
+          );
+
+          memberPage();
+        } catch (error) {
+          alertMessage(
+            error.message
+          );
+        }
+      };
+
+    async function tryAutomaticLogin() {
+      const token =
+        localStorage.getItem(
+          "cayoToken"
+        ) ||
+        localStorage.getItem(
+          "cayoPendingDeviceToken"
+        );
+
+      if (!token) {
+        return false;
+      }
+
+      try {
+        const response =
+          await api(
+            "/api/member/automatic-connect",
+            {
+              method: "POST",
+
+              body:
+                JSON.stringify({
+                  deviceToken: token
+                })
+            }
+          );
+
+        localStorage.setItem(
+          "cayoToken",
+          token
+        );
+
+        localStorage.removeItem(
+          "cayoPendingDeviceToken"
+        );
+
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    async function memberPage() {
+      const token =
+        localStorage.getItem(
+          "cayoToken"
+        );
+
+      if (!token) {
+        home();
+        return;
+      }
+
+      try {
+        const data =
+          await api(
+            "/api/member/dashboard",
+            {
+              method: "POST",
+
+              body:
+                JSON.stringify({
+                  deviceToken: token
+                })
+            }
+          );
+
+        const active =
+          data.active;
+
+        const rows =
+          data.entries
+            .filter(
+              (entry) =>
+                entry.end
+            )
+            .map(
+              (entry) => \`
+                <tr>
+                  <td>
+                    \${formatDate(
+                      entry.start
+                    )}
+                  </td>
+
+                  <td>
+                    \${formatDate(
+                      entry.end
+                    )}
+                  </td>
+
+                  <td>
+                    \${formatDuration(
+                      entry.duration
+                    )}
+                  </td>
+
+                  <td>
+                    \${formatMoney(
+                      entry.bonus
+                    )}
+                  </td>
+
+                  <td>
+                    \${entry.paid
+                      ? "Payé"
+                      : "En attente"}
+                  </td>
+                </tr>
+              \`
+            )
+            .join("");
+
+        app.innerHTML = \`
+          <div class="container">
+
+            <div class="eyebrow">
+              Pointeuse officielle
+            </div>
+
+            <h1>
+              \${data.member.fullName}
+            </h1>
+
+            <p class="muted">
+              \${data.member.grade}
+              ·
+              \${data.member.division}
+            </p>
+
+            <section class="statistics">
+
+              <article class="card">
+                <small>
+                  Aujourd'hui
+                </small>
+
+                <strong>
+                  \${formatDuration(
+                    data.stats.today
+                  )}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  Cette semaine
+                </small>
+
+                <strong>
+                  \${formatDuration(
+                    data.stats.week
+                  )}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  Ce mois
+                </small>
+
+                <strong>
+                  \${formatDuration(
+                    data.stats.month
+                  )}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  Prime totale
+                </small>
+
+                <strong>
+                  \${formatMoney(
+                    data.stats.totalBonus
+                  )}
+                </strong>
+              </article>
+
+            </section>
+
+            <section class="panel">
+
+              <h2>
+                \${active
+                  ? "Service en cours"
+                  : "Hors service"}
+              </h2>
+
+              <div
+                id="clock"
+                class="clock"
+              >
+                \${active
+                  ? formatDuration(
+                      Date.now() -
+                      new Date(
+                        active.start
+                      )
+                    )
+                  : "0 h 00"}
+              </div>
+
+              <p class="muted">
+                Prime fixe :
+                12 500 $ / heure
+              </p>
+
+              <button
+                class="button
+                \${active
+                  ? "red"
+                  : "green"}"
+                onclick="toggleService(
+                  \${Boolean(active)}
+                )"
+              >
+                \${active
+                  ? "Terminer le service"
+                  : "Commencer le service"}
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="logoutMember()"
+              >
+                Déconnexion
+              </button>
+
+            </section>
+
+            <section class="panel">
+
+              <h2>
+                Historique
+              </h2>
+
+              <div class="table-wrapper">
+
+                <table>
+
+                  <thead>
+
+                    <tr>
+                      <th>Arrivée</th>
+                      <th>Départ</th>
+                      <th>Durée</th>
+                      <th>Prime</th>
+                      <th>Paiement</th>
+                    </tr>
+
+                  </thead>
+
+                  <tbody>
+                    \${rows}
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </section>
+
+          </div>
+        \`;
+
+        clearInterval(timer);
+
+        if (active) {
+          timer = setInterval(
+            () => {
+              const clock =
+                document.getElementById(
+                  "clock"
+                );
+
+              if (clock) {
+                clock.textContent =
+                  formatDuration(
+                    Date.now() -
+                    new Date(
+                      active.start
+                    )
+                  );
+              }
+            },
+            1000
+          );
+        }
+      } catch (error) {
+        localStorage.removeItem(
+          "cayoToken"
+        );
+
+        home();
+      }
+    }
+
+    window.toggleService =
+      async function (active) {
+        try {
+          await api(
+            active
+              ? "/api/member/out"
+              : "/api/member/in",
+            {
+              method: "POST",
+
+              body:
+                JSON.stringify({
+                  deviceToken:
+                    localStorage.getItem(
+                      "cayoToken"
+                    )
+                })
+            }
+          );
+
+          memberPage();
+        } catch (error) {
+          alertMessage(
+            error.message
+          );
+        }
+      };
+
+    window.logoutMember =
+      function () {
+        localStorage.removeItem(
+          "cayoToken"
+        );
+
+        home();
+      };
+
+    function adminLoginPage() {
+      app.innerHTML = \`
+        <div class="center-page">
+
+          <section class="panel login-panel">
+
+            <div class="eyebrow">
+              Administration
+            </div>
+
+            <h1>
+              Accès Général
+            </h1>
+
+            <div class="field">
+
+              <label>
+                Mot de passe
+              </label>
+
+              <input
+                id="adminPassword"
+                type="password"
+              >
+
+            </div>
+
+            <button
+              class="button full"
+              onclick="adminLogin()"
+            >
+              Se connecter
+            </button>
+
+            <button
+              class="button secondary full"
+              onclick="home()"
+            >
+              Retour
+            </button>
+
+          </section>
+
+        </div>
+      \`;
+    }
+
+    window.adminLogin =
+      async function () {
+        try {
+          await api(
+            "/api/admin/login",
+            {
+              method: "POST",
+
+              body:
+                JSON.stringify({
+                  password:
+                    document.getElementById(
+                      "adminPassword"
+                    ).value
+                })
+            }
+          );
+
+          adminPage();
+        } catch (error) {
+          alertMessage(
+            error.message
+          );
+        }
+      };
+
+    async function adminPage(
+      tab = "dashboard"
+    ) {
+      try {
+        const data =
+          await api(
+            "/api/admin/data"
+          );
+
+        const activeEntries =
+          data.entries.filter(
+            (entry) =>
+              !entry.end
+          );
+
+        const unpaidTotal =
+          data.entries
+            .filter(
+              (entry) =>
+                entry.end &&
+                !entry.paid
+            )
+            .reduce(
+              (total, entry) =>
+                total +
+                entry.bonus,
+              0
+            );
+
+        let content = "";
+
+        if (tab === "dashboard") {
+          content = \`
+            <section class="statistics">
+
+              <article class="card">
+                <small>
+                  Miliciens
+                </small>
+
+                <strong>
+                  \${data.members.filter(
+                    (member) =>
+                      member.active
+                  ).length}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  En service
+                </small>
+
+                <strong>
+                  \${activeEntries.length}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  Demandes
+                </small>
+
+                <strong>
+                  \${data.requests.length}
+                </strong>
+              </article>
+
+              <article class="card">
+                <small>
+                  À payer
+                </small>
+
+                <strong>
+                  \${formatMoney(
+                    unpaidTotal
+                  )}
+                </strong>
+              </article>
+
+            </section>
+
+            <section class="panel">
+
+              <h2>
+                Miliciens en service
+              </h2>
+
+              \${activeEntries.length
+                ? activeEntries
+                    .map(
+                      (entry) => \`
+                        <div class="request-card">
+
+                          <strong>
+                            \${entry.memberName}
+                          </strong>
+
+                          <span>
+                            \${formatDuration(
+                              entry.duration
+                            )}
+                          </span>
+
+                        </div>
+                      \`
+                    )
+                    .join("")
+                : '<p class="muted">Aucun milicien en service.</p>'}
+
+            </section>
+          \`;
+        }
+
+        if (tab === "requests") {
+          content = \`
+            <section class="panel">
+
+              <h2>
+                Demandes en attente
+              </h2>
+
+              \${data.requests.length
+                ? data.requests
+                    .map(
+                      (request) => \`
+                        <div class="request-card">
+
+                          <div>
+
+                            <strong>
+                              \${request.fullName}
+                            </strong>
+
+                            <div class="muted">
+                              \${formatDate(
+                                request.createdAt
+                              )}
+                            </div>
+
+                            <p>
+                              \${request.message || ""}
+                            </p>
+
+                          </div>
+
+                          <div class="buttons">
+
+                            <button
+                              class="button green"
+                              onclick="approveRequest(
+                                \${request.id}
+                              )"
+                            >
+                              Accepter
+                            </button>
+
+                            <button
+                              class="button red"
+                              onclick="rejectRequest(
+                                \${request.id}
+                              )"
+                            >
+                              Refuser
+                            </button>
+
+                          </div>
+
+                        </div>
+                      \`
+                    )
+                    .join("")
+                : '<p class="muted">Aucune demande en attente.</p>'}
+
+            </section>
+          \`;
+        }
+
+        if (tab === "members") {
+          content = \`
+            <section class="panel">
+
+              <div class="table-wrapper">
+
+                <table>
+
+                  <thead>
+
+                    <tr>
+                      <th>Nom</th>
+                      <th>Grade</th>
+                      <th>Division</th>
+                      <th>Statut</th>
+                      <th>Actions</th>
+                    </tr>
+
+                  </thead>
+
+                  <tbody>
+
+                    \${data.members
+                      .map(
+                        (member) => \`
+                          <tr>
+
+                            <td>
+                              \${member.fullName}
+                            </td>
+
+                            <td>
+                              \${member.grade}
+                            </td>
+
+                            <td>
+                              \${member.division}
+                            </td>
+
+                            <td>
+                              \${member.active
+                                ? "Actif"
+                                : "Désactivé"}
+                            </td>
+
+                            <td>
+
+                              <button
+                                class="button secondary"
+                                onclick="toggleMember(
+                                  \${member.id},
+                                  \${member.active}
+                                )"
+                              >
+                                \${member.active
+                                  ? "Désactiver"
+                                  : "Réactiver"}
+                              </button>
+
+                              <button
+                                class="button red"
+                                onclick="deleteMember(
+                                  \${member.id}
+                                )"
+                              >
+                                Supprimer
+                              </button>
+
+                            </td>
+
+                          </tr>
+                        \`
+                      )
+                      .join("")}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </section>
+          \`;
+        }
+
+        if (tab === "entries") {
+          content = \`
+            <section class="panel">
+
+              <div class="table-wrapper">
+
+                <table>
+
+                  <thead>
+
+                    <tr>
+                      <th>Milicien</th>
+                      <th>Début</th>
+                      <th>Fin</th>
+                      <th>Durée</th>
+                      <th>Prime</th>
+                      <th>Paiement</th>
+                      <th>Actions</th>
+                    </tr>
+
+                  </thead>
+
+                  <tbody>
+
+                    \${data.entries
+                      .map(
+                        (entry) => \`
+                          <tr>
+
+                            <td>
+                              \${entry.memberName}
+                            </td>
+
+                            <td>
+                              \${formatDate(
+                                entry.start
+                              )}
+                            </td>
+
+                            <td>
+                              \${entry.end
+                                ? formatDate(
+                                    entry.end
+                                  )
+                                : "En cours"}
+                            </td>
+
+                            <td>
+                              \${formatDuration(
+                                entry.duration
+                              )}
+                            </td>
+
+                            <td>
+                              \${entry.end
+                                ? formatMoney(
+                                    entry.bonus
+                                  )
+                                : "-"}
+                            </td>
+
+                            <td>
+
+                              \${entry.end
+                                ? \`
+                                  <button
+                                    class="button
+                                    \${entry.paid
+                                      ? "green"
+                                      : "secondary"}"
+                                    onclick="togglePayment(
+                                      \${entry.id}
+                                    )"
+                                  >
+                                    \${entry.paid
+                                      ? "Payé"
+                                      : "Marquer payé"}
+                                  </button>
+                                \`
+                                : "-"}
+
+                            </td>
+
+                            <td>
+
+                              <button
+                                class="button red"
+                                onclick="deleteEntry(
+                                  \${entry.id}
+                                )"
+                              >
+                                Supprimer
+                              </button>
+
+                            </td>
+
+                          </tr>
+                        \`
+                      )
+                      .join("")}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </section>
+          \`;
+        }
+
+        app.innerHTML = \`
+          <div class="container">
+
+            <div class="eyebrow">
+              Milice de Cayo Perico
+            </div>
+
+            <h1>
+              Administration
+            </h1>
+
+            <div class="buttons">
+
+              <button
+                class="button secondary"
+                onclick="adminPage(
+                  'dashboard'
+                )"
+              >
+                Vue générale
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="adminPage(
+                  'requests'
+                )"
+              >
+                Demandes
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="adminPage(
+                  'members'
+                )"
+              >
+                Miliciens
+              </button>
+
+              <button
+                class="button secondary"
+                onclick="adminPage(
+                  'entries'
+                )"
+              >
+                Pointages
+              </button>
+
+              <button
+                class="button red"
+                onclick="adminLogout()"
+              >
+                Déconnexion
+              </button>
+
+            </div>
+
+            \${content}
+
+          </div>
+        \`;
+      } catch {
+        adminLoginPage();
+      }
+    }
+
+    window.adminPage =
+      adminPage;
+
+    window.approveRequest =
+      async function (id) {
+        const grade =
+          prompt(
+            "Grade du milicien :",
+            "Milicien"
+          ) || "Milicien";
+
+        const division =
+          prompt(
+            "Division :",
+            "Générale"
+          ) || "Générale";
+
+        await api(
+          "/api/admin/request/" +
+            id +
+            "/approve",
+          {
+            method: "POST",
+
+            body:
+              JSON.stringify({
+                grade,
+                division
+              })
+          }
+        );
+
+        adminPage("requests");
+      };
+
+    window.rejectRequest =
+      async function (id) {
+        await api(
+          "/api/admin/request/" +
+            id +
+            "/reject",
+          {
+            method: "POST"
+          }
+        );
+
+        adminPage("requests");
+      };
+
+    window.toggleMember =
+      async function (
+        id,
+        active
+      ) {
+        await api(
+          "/api/admin/member/" +
+            id,
+          {
+            method: "PUT",
+
+            body:
+              JSON.stringify({
+                active: !active
+              })
+          }
+        );
+
+        adminPage("members");
+      };
+
+    window.deleteMember =
+      async function (id) {
+        if (
+          !confirm(
+            "Supprimer ce membre et tous ses pointages ?"
+          )
+        ) {
+          return;
+        }
+
+        await api(
+          "/api/admin/member/" +
+            id,
+          {
+            method: "DELETE"
+          }
+        );
+
+        adminPage("members");
+      };
+
+    window.togglePayment =
+      async function (id) {
+        await api(
+          "/api/admin/pay/" +
+            id,
+          {
+            method: "POST"
+          }
+        );
+
+        adminPage("entries");
+      };
+
+    window.deleteEntry =
+      async function (id) {
+        if (
+          !confirm(
+            "Supprimer ce pointage ?"
+          )
+        ) {
+          return;
+        }
+
+        await api(
+          "/api/admin/entry/" +
+            id,
+          {
+            method: "DELETE"
+          }
+        );
+
+        adminPage("entries");
+      };
+
+    window.adminLogout =
+      async function () {
+        await api(
+          "/api/admin/logout",
+          {
+            method: "POST"
+          }
+        );
+
+        home();
+      };
+
+    async function startApplication() {
+      const automaticallyConnected =
+        await tryAutomaticLogin();
+
+      if (automaticallyConnected) {
+        memberPage();
+        return;
+      }
+
+      try {
+        const adminStatus =
+          await api(
+            "/api/admin/status"
+          );
+
+        if (adminStatus.admin) {
+          adminPage();
+          return;
+        }
+      } catch {
+        // Aucun problème.
+      }
+
+      home();
+    }
+
+    startApplication();
+  </script>
+
+</body>
+</html>
+`;
+
+/* =========================================================
+   AFFICHAGE DU SITE
+========================================================= */
+
+app.get("*", (request, response) => {
+  response
+    .type("html")
+    .send(html);
+});
+
+/* =========================================================
+   DÉMARRAGE
+========================================================= */
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      "Pointeuse Cayo Perico lancée sur le port " +
+        PORT
+    );
+  }
+);
