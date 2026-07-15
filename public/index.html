@@ -2,20 +2,345 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
 
   <title>Pointeuse Cayo Perico</title>
 
-  <link rel="stylesheet" href="/style.css?v=5">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      color: #f6f2e8;
+
+      background:
+        linear-gradient(
+          rgba(4, 14, 10, 0.76),
+          rgba(4, 14, 10, 0.9)
+        ),
+        url(
+          "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1800&q=80"
+        );
+
+      background-position: center;
+      background-size: cover;
+      background-attachment: fixed;
+    }
+
+    .wrapper {
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 520px;
+      padding: 34px;
+      text-align: center;
+
+      background: rgba(7, 24, 18, 0.94);
+
+      border: 1px solid rgba(216, 181, 95, 0.35);
+      border-radius: 22px;
+
+      box-shadow:
+        0 30px 90px rgba(0, 0, 0, 0.45);
+    }
+
+    .eyebrow {
+      color: #d8b55f;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 2px;
+    }
+
+    h1 {
+      margin: 10px 0 12px;
+      color: #f2d891;
+      font-size: 42px;
+    }
+
+    p {
+      color: #b5c1b8;
+      line-height: 1.5;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 12px;
+      padding: 14px;
+
+      border: none;
+      border-radius: 11px;
+
+      cursor: pointer;
+      font-weight: 800;
+
+      color: #152017;
+      background: #d8b55f;
+    }
+
+    button:hover {
+      filter: brightness(1.08);
+    }
+
+    button.secondary {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.07);
+
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    input {
+      width: 100%;
+      margin-top: 10px;
+      padding: 13px;
+
+      color: #ffffff;
+      background: #081510;
+
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 10px;
+
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #d8b55f;
+    }
+
+    .section {
+      display: none;
+      margin-top: 18px;
+    }
+
+    .section.active {
+      display: block;
+    }
+
+    .status {
+      margin-top: 18px;
+      padding: 10px;
+
+      color: #9be1b8;
+      background: rgba(60, 163, 111, 0.12);
+
+      border-radius: 10px;
+      font-size: 14px;
+    }
+
+    @media (max-width: 600px) {
+      .card {
+        padding: 24px;
+      }
+
+      h1 {
+        font-size: 34px;
+      }
+    }
+  </style>
 </head>
 
 <body>
-  <div class="background"></div>
 
-  <main id="app"></main>
+  <div class="wrapper">
 
-  <div id="toast"></div>
+    <div class="card">
 
-  <script src="/app.js?v=5"></script>
+      <div class="eyebrow">
+        MILICE DE CAYO PERICO
+      </div>
+
+      <h1>
+        Pointeuse officielle
+      </h1>
+
+      <p>
+        Accédez à votre espace ou envoyez une demande d'accès.
+      </p>
+
+      <button onclick="showSection('member')">
+        Espace Milicien
+      </button>
+
+      <button
+        class="secondary"
+        onclick="showSection('request')"
+      >
+        Demande d'accès
+      </button>
+
+      <button
+        class="secondary"
+        onclick="showSection('admin')"
+      >
+        Administration
+      </button>
+
+      <div
+        id="member"
+        class="section"
+      >
+
+        <input
+          id="memberName"
+          type="text"
+          placeholder="Nom RP complet"
+        >
+
+        <button onclick="memberConnect()">
+          Se connecter
+        </button>
+
+      </div>
+
+      <div
+        id="request"
+        class="section"
+      >
+
+        <input
+          id="firstName"
+          type="text"
+          placeholder="Prénom RP"
+        >
+
+        <input
+          id="lastName"
+          type="text"
+          placeholder="Nom RP"
+        >
+
+        <button onclick="sendRequest()">
+          Envoyer la demande
+        </button>
+
+      </div>
+
+      <div
+        id="admin"
+        class="section"
+      >
+
+        <input
+          id="adminPassword"
+          type="password"
+          placeholder="Mot de passe administrateur"
+        >
+
+        <button onclick="adminConnect()">
+          Se connecter
+        </button>
+
+      </div>
+
+      <div
+        id="status"
+        class="status"
+      >
+        Vérification du serveur...
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    function showSection(sectionId) {
+      const sections = document.querySelectorAll(".section");
+
+      sections.forEach((section) => {
+        section.classList.remove("active");
+      });
+
+      document
+        .getElementById(sectionId)
+        .classList.add("active");
+    }
+
+    function memberConnect() {
+      const name = document
+        .getElementById("memberName")
+        .value
+        .trim();
+
+      if (!name) {
+        alert("Entre ton nom RP.");
+        return;
+      }
+
+      alert(
+        "Connexion demandée pour " + name
+      );
+    }
+
+    function sendRequest() {
+      const firstName = document
+        .getElementById("firstName")
+        .value
+        .trim();
+
+      const lastName = document
+        .getElementById("lastName")
+        .value
+        .trim();
+
+      if (!firstName || !lastName) {
+        alert(
+          "Remplis ton prénom et ton nom RP."
+        );
+        return;
+      }
+
+      alert(
+        "Demande envoyée pour " +
+        firstName +
+        " " +
+        lastName
+      );
+    }
+
+    function adminConnect() {
+      const password = document
+        .getElementById("adminPassword")
+        .value;
+
+      if (!password) {
+        alert(
+          "Entre le mot de passe administrateur."
+        );
+        return;
+      }
+
+      alert(
+        "Connexion administrateur demandée."
+      );
+    }
+
+    fetch("/health")
+      .then((response) => response.json())
+      .then(() => {
+        document
+          .getElementById("status")
+          .textContent = "Serveur en ligne";
+      })
+      .catch(() => {
+        document
+          .getElementById("status")
+          .textContent = "Serveur inaccessible";
+      });
+  </script>
+
 </body>
 </html>
