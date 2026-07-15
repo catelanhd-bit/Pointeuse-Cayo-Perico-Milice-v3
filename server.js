@@ -1000,7 +1000,7 @@ app.delete(
    INTERFACE HTML
 ========================================================= */
 
-const html = String.raw`
+const html = `
 <!DOCTYPE html>
 <html lang="fr">
 <head>
