@@ -1,15 +1,40 @@
-# Pointeuse Cayo Perico
+# Pointeuse officielle de la Milice de Cayo Perico
 
-Cette version n'utilise aucun dossier `public` : seulement `server.js` et `package.json`.
+## Fonctionnement
 
-## Railway
+### Milicien
+1. Le milicien entre son prénom RP et son nom RP.
+2. Le navigateur reçoit un identifiant local.
+3. L’administrateur accepte la demande.
+4. Le milicien recharge le site.
+5. Il est reconnu automatiquement sur ce navigateur.
+6. Il peut prendre et terminer son service.
+7. Le montant à payer est calculé à 12 500 $ par heure.
 
-1. Envoie les fichiers `server.js`, `package.json` et `README.md` à la racine du dépôt GitHub.
-2. Railway redéploie automatiquement.
-3. Ajoute dans Railway > Variables :
-   - `ADMIN_PASSWORD` : ton mot de passe admin
-   - `SESSION_SECRET` : une longue valeur secrète
+### Administration
+- Accepter ou refuser les demandes.
+- Voir les miliciens en service.
+- Voir leurs heures non payées.
+- Voir le montant à payer.
+- Marquer toutes leurs heures non payées comme payées.
+- Désactiver ou réactiver un accès.
 
-Mot de passe admin par défaut : `CayoAdmin2026!`
+## Mot de passe administrateur par défaut
 
-Les données sont créées automatiquement dans `db.json`.
+CayoAdmin2026!
+
+Sur Railway, ajoutez une variable :
+
+ADMIN_PASSWORD=votre_mot_de_passe
+
+Ajoutez également :
+
+SESSION_SECRET=une_valeur_longue_et_secrete
+
+## Déploiement Railway
+
+1. Décompressez le ZIP.
+2. Envoyez tout le dossier avec GitHub Desktop.
+3. Déployez le dépôt GitHub sur Railway.
+4. Générez un domaine public.
+5. Pour conserver les données durablement, montez un volume Railway sur `/app/data`.
